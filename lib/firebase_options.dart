@@ -52,21 +52,19 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyCU5B-9CaArRQMv26k6JwIfvDHNCCoBknU',
-    appId: '1:727123421542:android:74cdb5ca25713b9d3f80a7',
+    appId: '1:727123421542:android:f9dabd2950de23763f80a7',
     messagingSenderId: '727123421542',
     projectId: 'evide-school-parent',
     storageBucket: 'evide-school-parent.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyD0JFT7GrACfEUfSBmiWGfnJy9eF7grni4',
-    appId: '1:727123421542:ios:f9d800b2c9340a7c3f80a7',
+    appId: '1:727123421542:ios:2d202da10d7d1cc33f80a7',
     messagingSenderId: '727123421542',
     projectId: 'evide-school-parent',
     storageBucket: 'evide-school-parent.firebasestorage.app',
-    iosBundleId: 'com.example.evideSchoolParent',
+    iosBundleId: 'in.evide.parent',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyD0JFT7GrACfEUfSBmiWGfnJy9eF7grni4',
     appId: '1:727123421542:ios:f9d800b2c9340a7c3f80a7',

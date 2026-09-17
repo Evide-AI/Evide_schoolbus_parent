@@ -1,4 +1,4 @@
-package com.example.evide_school_parent
+package `in`.evide.parent
 
 import io.flutter.embedding.android.FlutterActivity
 
