@@ -63,7 +63,7 @@ class DefaultFirebaseOptions {
     messagingSenderId: '727123421542',
     projectId: 'evide-school-parent',
     storageBucket: 'evide-school-parent.firebasestorage.app',
-    iosBundleId: 'in.evide.parent',
+    iosBundleId: 'in.evide.school.parent',
   );
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyD0JFT7GrACfEUfSBmiWGfnJy9eF7grni4',

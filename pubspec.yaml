@@ -25,14 +25,16 @@ dev_dependencies:
 # Native splash screen (logo on white). After `flutter pub get`, generate the
 # native assets once with:  dart run flutter_native_splash:create
 flutter_native_splash:
-  color: "#ffffff"
-  image: assets/evide-logo.png
+  color: "#FFFFFF"
+  image: assets/splash/splash_logo.png
   android_12:
-    color: "#ffffff"
-    image: assets/evide-logo.png
+    color: "#FFFFFF"
+    image: assets/splash/android12_splash.png
 
 flutter:
   uses-material-design: true
   assets:
     - assets/evide-logo.png
     - assets/alarm.mp3
+    - assets/bus_top.png
+    - assets/markers/
