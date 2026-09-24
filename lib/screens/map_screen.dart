@@ -9,6 +9,7 @@ import '../config.dart';
 import '../models/models.dart';
 import '../services/parent_service.dart';
 import '../theme.dart';
+import '../utils/route_trail.dart';
 import 'notifications_screen.dart';
 
 enum _MarkerKind { school, stop, bus }
@@ -23,6 +24,15 @@ const double _minSpeedForHeading = 3; // km/h
 const double _minMoveForHeading = 5; // metres
 // Older than this, the bus is treated as offline.
 const Duration _staleAfter = Duration(minutes: 5);
+
+// --- Bus trail (yellow line) ---
+// The trail is the path the bus has actually driven, recorded from live
+// positions while the app is open. Only the parts of it that sit on this
+// child's blue route are drawn, so a bus doing other stops or heading to the
+// depot leaves no yellow line on the parent's map.
+const double _trailToleranceM = 60; // how far off the blue line still counts
+const double _minTrailMove = 8; // metres before a new trail point is kept
+const int _maxTrailPoints = 800; // keeps memory and drawing cost bounded
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -47,6 +57,9 @@ class _MapScreenState extends State<MapScreen> {
   // Per-bus direction state (keyed by bus id).
   final Map<String, bool> _busFacingRight = {};
   final Map<String, ({double lat, double lng})> _lastBusPoint = {};
+
+  // Where each bus has driven, keyed by bus id.
+  final Map<String, List<GeoPoint>> _trails = {};
 
   @override
   void initState() {
@@ -92,14 +105,14 @@ class _MapScreenState extends State<MapScreen> {
         if (pos != null) {
           _updateFacing(bus.id.toString(), pos.lat, pos.lng, pos.heading,
               pos.speedKmh);
+          _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
         }
-        await _computeBusSegment(child);
 
         final channel = _service.subscribeBusPosition(bus.id, (newPos) {
           child.livePosition = newPos;
           _updateFacing(bus.id.toString(), newPos.lat, newPos.lng,
               newPos.heading, newPos.speedKmh);
-          _computeBusSegment(child).then((_) => _redraw());
+          _recordTrailPoint(bus.id.toString(), newPos.lat, newPos.lng);
           _redraw();
         });
         _channels.add(channel);
@@ -116,6 +129,37 @@ class _MapScreenState extends State<MapScreen> {
         _loading = false;
       });
     }
+  }
+
+  // Adds a point to this bus's trail, skipping GPS noise while parked.
+  void _recordTrailPoint(String busId, double lat, double lng) {
+    final trail = _trails.putIfAbsent(busId, () => <GeoPoint>[]);
+    if (trail.isNotEmpty) {
+      final last = trail.last;
+      if (_distanceM(last.lat, last.lng, lat, lng) < _minTrailMove) return;
+    }
+    trail.add(GeoPoint(lat, lng));
+    if (trail.length > _maxTrailPoints) {
+      trail.removeRange(0, trail.length - _maxTrailPoints);
+    }
+  }
+
+  // This child's blue route as plain points, or null when there's no route.
+  List<GeoPoint>? _routePoints(Child child) {
+    final line = child.routeLine;
+    if (line == null || line.length < 2) return null;
+    // routeLine holds [lng, lat] pairs.
+    return line.map((c) => GeoPoint(c[1], c[0])).toList();
+  }
+
+  // True / false when the bus is on or off the blue route; null when we can't
+  // tell (no live position or no route yet).
+  bool? _isBusOnRoute(Child child) {
+    final pos = child.livePosition;
+    final route = _routePoints(child);
+    if (pos == null || route == null) return null;
+    return isOnRoute(GeoPoint(pos.lat, pos.lng), route,
+        toleranceMetres: _trailToleranceM);
   }
 
   // Decides whether the bus should face left or right. Only changes when the
@@ -187,29 +231,6 @@ class _MapScreenState extends State<MapScreen> {
         ];
   }
 
-  // Optional road segment from the live bus to the child's stop, drawn on top
-  // of the base route in a highlighted color. Null when there's no live bus.
-  Future<void> _computeBusSegment(Child child) async {
-    final pos = child.livePosition;
-    final stopLat = child.pickupLat ?? child.dropLat;
-    final stopLng = child.pickupLng ?? child.dropLng;
-    if (pos == null || stopLat == null || stopLng == null) {
-      child.busSegment = null;
-      return;
-    }
-    final line = await _service.fetchRoadRoute(
-      fromLat: pos.lat,
-      fromLng: pos.lng,
-      toLat: stopLat,
-      toLng: stopLng,
-    );
-    child.busSegment = line ??
-        [
-          [pos.lng, pos.lat],
-          [stopLng, stopLat]
-        ];
-  }
-
   // Pre-rendered marker icons (PNG bytes), built once when the map is created.
   Uint8List? _schoolIcon;
   Uint8List? _stopIcon;
@@ -262,26 +283,38 @@ class _MapScreenState extends State<MapScreen> {
     final child = _selected;
     if (child == null) return;
 
-    // --- Route lines (draw the base school<->stop first, bus segment on top) ---
-    if (child.routeLine != null && child.routeLine!.length >= 2) {
+    // --- Blue route: school <-> this child's stop ---
+    final route = _routePoints(child);
+    if (route != null) {
       await _lineManager!.create(PolylineAnnotationOptions(
         geometry: LineString(
-          coordinates:
-              child.routeLine!.map((c) => Position(c[0], c[1])).toList(),
+          coordinates: route.map((p) => Position(p.lng, p.lat)).toList(),
         ),
         lineColor: AppColors.accent.value,
         lineWidth: 5.5,
       ));
     }
-    if (child.busSegment != null && child.busSegment!.length >= 2) {
-      await _lineManager!.create(PolylineAnnotationOptions(
-        geometry: LineString(
-          coordinates:
-              child.busSegment!.map((c) => Position(c[0], c[1])).toList(),
-        ),
-        lineColor: AppColors.amber.value,
-        lineWidth: 6.0,
-      ));
+
+    // --- Yellow trail: only where the bus drove along the blue route ---
+    // Off-route driving (other stops, the depot, parallel roads) is dropped,
+    // so nothing yellow is drawn while the bus is away from this route.
+    final busId = child.bus?.id.toString();
+    final trail = busId != null ? _trails[busId] : null;
+    if (route != null && trail != null && trail.length > 1) {
+      final pieces = clipTrailToRoute(
+        trail: trail,
+        route: route,
+        toleranceMetres: _trailToleranceM,
+      );
+      for (final piece in pieces) {
+        await _lineManager!.create(PolylineAnnotationOptions(
+          geometry: LineString(
+            coordinates: piece.map((p) => Position(p.lng, p.lat)).toList(),
+          ),
+          lineColor: AppColors.amber.value,
+          lineWidth: 6.0,
+        ));
+      }
     }
 
     // --- Markers (big custom icons) ---
@@ -325,6 +358,9 @@ class _MapScreenState extends State<MapScreen> {
     if (points.isNotEmpty) {
       await _pointManager!.createMulti(points);
     }
+
+    // Keeps the bottom sheet's on-route line in step with the map.
+    if (mounted) setState(() {});
 
     await _fitCamera(child);
   }
@@ -410,8 +446,9 @@ class _MapScreenState extends State<MapScreen> {
     final map = _map;
     if (map == null) return;
     final coords = <List<double>>[]; // [lng, lat]
-    if (child.school.lat != null)
+    if (child.school.lat != null) {
       coords.add([child.school.lng!, child.school.lat!]);
+    }
     final stopLat = child.pickupLat ?? child.dropLat;
     final stopLng = child.pickupLng ?? child.dropLng;
     if (stopLat != null && stopLng != null) coords.add([stopLng, stopLat]);
@@ -474,6 +511,7 @@ class _MapScreenState extends State<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final selected = _selected;
     return Scaffold(
       body: SafeArea(
         bottom: false,
@@ -519,10 +557,13 @@ class _MapScreenState extends State<MapScreen> {
                       ),
 
                       // Bottom sheet with the selected child's bus details
-                      if (_selected != null)
+                      if (selected != null)
                         Align(
                           alignment: Alignment.bottomCenter,
-                          child: _BusDetailsSheet(child: _selected!),
+                          child: _BusDetailsSheet(
+                            child: selected,
+                            onRoute: _isBusOnRoute(selected),
+                          ),
                         ),
                     ],
                   ),
@@ -652,7 +693,12 @@ class _MiniAvatar extends StatelessWidget {
 
 class _BusDetailsSheet extends StatelessWidget {
   final Child child;
-  const _BusDetailsSheet({required this.child});
+
+  /// true = bus is on this child's blue route, false = away from it,
+  /// null = can't tell yet (no live position or no route).
+  final bool? onRoute;
+
+  const _BusDetailsSheet({required this.child, this.onRoute});
 
   @override
   Widget build(BuildContext context) {
@@ -692,6 +738,9 @@ class _BusDetailsSheet extends StatelessWidget {
     } else {
       speedText = 'Live location active';
     }
+
+    // Explains an empty yellow trail, so parents don't think tracking is broken.
+    final bool showOffRouteNote = onRoute == false && !isStale && pos != null;
 
     return Container(
       margin: const EdgeInsets.all(10),
@@ -763,6 +812,21 @@ class _BusDetailsSheet extends StatelessWidget {
                       const TextStyle(fontSize: 14, color: AppColors.inkSoft)),
             ],
           ),
+          if (showOffRouteNote) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.alt_route_rounded,
+                    size: 18, color: AppColors.inkFaint),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text('Bus is not on your route yet',
+                      style:
+                          TextStyle(fontSize: 14, color: AppColors.inkSoft)),
+                ),
+              ],
+            ),
+          ],
           if (pos?.recordedAt != null) ...[
             const SizedBox(height: 6),
             Row(
