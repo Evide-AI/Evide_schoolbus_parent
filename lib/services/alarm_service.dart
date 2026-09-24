@@ -1,10 +1,15 @@
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
-// Handles the proximity alarm: plays a sound in the foreground and shows a
-// high-priority local notification. Background/killed alarms are delivered by
-// FCM (see main.dart's background handler) on the same 'proximity_alarm'
-// channel so the phone rings even when the app isn't open.
+/// The proximity alarm: a loud, high-priority notification with the alarm tone,
+/// shown whether the app is open, in the background, or closed.
+///
+/// How the sound works on Android: from Android 8 the SOUND IS A PROPERTY OF
+/// THE CHANNEL, not of each notification, and a channel's settings are frozen
+/// once created. That's why the channel id carries a version — bumping it is
+/// the only way to change the tone for people who already have the app.
+/// The backend must send this exact id (see notificationWorker.js).
 class AlarmService {
   static final AlarmService _instance = AlarmService._();
   factory AlarmService() => _instance;
@@ -14,45 +19,71 @@ class AlarmService {
   final _localNotifications = FlutterLocalNotificationsPlugin();
   bool _initialized = false;
 
-  static const alarmChannelId = 'proximity_alarm';
+  /// Bump the suffix if you ever change the sound or importance below.
+  static const alarmChannelId = 'proximity_alarm_v2';
+  static const alarmChannelName = 'Bus approaching alerts';
+  static const generalChannelId = 'general';
+
+  /// Needs android/app/src/main/res/raw/alarm.mp3 to exist.
+  static const _alarmSound = RawResourceAndroidNotificationSound('alarm');
 
   Future<void> init() async {
     if (_initialized) return;
 
     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const iosInit = DarwinInitializationSettings();
+    const iosInit = DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
     await _localNotifications.initialize(
       const InitializationSettings(android: androidInit, iOS: iosInit),
     );
 
-    // High-importance channel so the notification pops and plays sound even in
-    // the background. NOTE: to use a CUSTOM alarm sound, add a sound file at
-    // android/app/src/main/res/raw/alarm.mp3 and set `sound:` below to
-    // RawResourceAndroidNotificationSound('alarm'). Left as default here so it
-    // works out-of-the-box before you add a sound asset.
-    const channel = AndroidNotificationChannel(
+    final android = _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+
+    // Alarm channel: max importance, alarm tone, vibration. Treated as an alarm
+    // by the system so it stays audible in Do Not Disturb's alarm exception.
+    await android?.createNotificationChannel(const AndroidNotificationChannel(
       alarmChannelId,
-      'Bus approaching alerts',
+      alarmChannelName,
       description: 'Rings when your child\u2019s bus is near the pickup or drop point.',
       importance: Importance.max,
       playSound: true,
-    );
-    await _localNotifications
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+      sound: _alarmSound,
+      audioAttributesUsage: AudioAttributesUsage.alarm,
+      enableVibration: true,
+      enableLights: true,
+    ));
+
+    // Everything else (bus started, school notices) stays quiet by comparison.
+    await android?.createNotificationChannel(const AndroidNotificationChannel(
+      generalChannelId,
+      'Bus updates',
+      description: 'Trip start and end, and notices from your school.',
+      importance: Importance.defaultImportance,
+    ));
+
+    // Android 13+ needs the runtime permission before anything can be shown.
+    await android?.requestNotificationsPermission();
 
     _initialized = true;
   }
 
-  /// Called when a proximity alarm arrives while the app is in the foreground.
+  /// Shown when an alarm arrives while the app is on screen. Android suppresses
+  /// FCM's own notification in that case, so the app raises it instead.
   Future<void> ringForeground({required String title, required String body}) async {
     await init();
-    // Play the alarm tone. Uses a bundled asset if present; otherwise this is a
-    // no-op that won't crash. Add assets/alarm.mp3 and register it in pubspec
-    // to enable the custom tone.
+
+    // The bundled tone, for the in-app case. The channel handles the sound when
+    // the notification comes from the system instead.
     try {
+      await _player.setVolume(1.0);
       await _player.play(AssetSource('alarm.mp3'));
-    } catch (_) {/* no custom sound asset yet */}
+    } catch (e) {
+      debugPrint('Alarm tone skipped: $e');
+    }
 
     await _localNotifications.show(
       DateTime.now().millisecondsSinceEpoch ~/ 1000,
@@ -61,12 +92,23 @@ class AlarmService {
       const NotificationDetails(
         android: AndroidNotificationDetails(
           alarmChannelId,
-          'Bus approaching alerts',
+          alarmChannelName,
           importance: Importance.max,
-          priority: Priority.high,
+          priority: Priority.max,
+          category: AndroidNotificationCategory.alarm,
           playSound: true,
+          sound: _alarmSound,
+          audioAttributesUsage: AudioAttributesUsage.alarm,
+          enableVibration: true,
+          fullScreenIntent: true,
+          visibility: NotificationVisibility.public,
         ),
-        iOS: DarwinNotificationDetails(presentSound: true),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+          sound: 'alarm.caf',
+          interruptionLevel: InterruptionLevel.timeSensitive,
+        ),
       ),
     );
   }

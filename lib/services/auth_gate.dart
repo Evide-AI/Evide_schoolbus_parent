@@ -40,7 +40,7 @@ class _AuthGateState extends State<AuthGate> {
       if (session != null) {
         PushService.instance.attach(_service);
       } else {
-        PushService.instance.detach();
+        PushService.instance.detach(service: _service);
       }
       if (mounted) setState(() => _session = session);
     });

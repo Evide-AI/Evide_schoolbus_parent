@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -10,6 +11,7 @@ import '../models/models.dart';
 import '../services/parent_service.dart';
 import '../theme.dart';
 import '../utils/route_trail.dart';
+import 'change_password_screen.dart';
 import 'notifications_screen.dart';
 
 enum _MarkerKind { school, stop, bus }
@@ -34,13 +36,28 @@ const double _trailToleranceM = 60; // how far off the blue line still counts
 const double _minTrailMove = 8; // metres before a new trail point is kept
 const int _maxTrailPoints = 800; // keeps memory and drawing cost bounded
 
+// Optional custom marker images. Drop your own PNGs at these paths (square,
+// ~512x512, transparent background, subject centred — the point of a pin
+// should sit at the bottom edge, since markers are anchored there).
+// If a file is missing, the app falls back to the pin drawn in code, so
+// nothing breaks before you add them.
+const String _schoolMarkerAsset = 'assets/markers/school_marker.png';
+const String _studentMarkerAsset = 'assets/markers/student_marker.png';
+// On-screen size of the custom images. Raise for bigger markers.
+const double _customMarkerIconSize = 0.55;
+
+// Live updates arrive over Supabase Realtime (a WebSocket). If that socket
+// drops — patchy mobile data, or Android freezing the app in the background —
+// we fall back to asking for the latest position on a timer until it's back.
+const Duration _fallbackPollInterval = Duration(seconds: 20);
+
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
   @override
   State<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends State<MapScreen> {
+class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final _service = ParentService();
 
   MapboxMap? _map;
@@ -50,9 +67,16 @@ class _MapScreenState extends State<MapScreen> {
   List<Child> _children = [];
   int _selectedIndex = 0;
   bool _loading = true;
+  bool _refreshing = false;
+  DateTime? _lastRefreshed;
   String? _error;
 
   final List<RealtimeChannel> _channels = [];
+
+  // Realtime (WebSocket) health: true once the position channels have joined.
+  // While it's false, _pollTimer fetches positions on a timer instead.
+  bool _liveConnected = false;
+  Timer? _pollTimer;
 
   // Per-bus direction state (keyed by bus id).
   final Map<String, bool> _busFacingRight = {};
@@ -64,23 +88,74 @@ class _MapScreenState extends State<MapScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     MapboxOptions.setAccessToken(AppConfig.mapboxPublicToken);
     _load();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _pollTimer?.cancel();
     for (final ch in _channels) {
       ch.unsubscribe();
     }
     super.dispose();
   }
 
-  Future<void> _load() async {
+  /// Android and iOS suspend the WebSocket while the app is in the background,
+  /// and it doesn't always come back on its own. Reconnecting on resume is what
+  /// keeps tracking live after the parent locks their phone and returns.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _children.isNotEmpty) {
+      _load(silent: true);
+    }
+  }
+
+  /// Safety net for when the socket is down: ask for the latest position
+  /// directly. Stops as soon as Realtime is connected again.
+  void _startFallbackPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(_fallbackPollInterval, (_) async {
+      if (!mounted || _liveConnected) return;
+      for (final child in _children) {
+        final bus = child.bus;
+        if (bus == null) continue;
+        final pos = await _service.fetchBusPosition(bus.id);
+        if (pos == null) continue;
+        child.livePosition = pos;
+        _updateFacing(bus.id.toString(), pos.lat, pos.lng, pos.heading, pos.speedKmh);
+        _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
+      }
+      if (mounted) {
+        setState(() => _lastRefreshed = DateTime.now());
+        _redraw();
+      }
+    });
+  }
+
+  /// Loads everything: children, their routes, and live bus positions.
+  /// [silent] keeps the map on screen (used by the refresh button) instead of
+  /// replacing it with a full-screen spinner.
+  Future<void> _load({bool silent = false}) async {
     setState(() {
-      _loading = true;
+      if (silent) {
+        _refreshing = true;
+      } else {
+        _loading = true;
+      }
       _error = null;
     });
+
+    // Drop existing realtime subscriptions, or a refresh would stack a second
+    // set of listeners on top of the first.
+    for (final ch in _channels) {
+      ch.unsubscribe();
+    }
+    _channels.clear();
+    _liveConnected = false;
+
     try {
       final children = await _service.loadChildren();
       if (children.isEmpty) {
@@ -88,6 +163,7 @@ class _MapScreenState extends State<MapScreen> {
           _error =
               'No children are linked to your account yet. Contact your school office.';
           _loading = false;
+          _refreshing = false;
         });
         return;
       }
@@ -108,27 +184,50 @@ class _MapScreenState extends State<MapScreen> {
           _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
         }
 
-        final channel = _service.subscribeBusPosition(bus.id, (newPos) {
-          child.livePosition = newPos;
-          _updateFacing(bus.id.toString(), newPos.lat, newPos.lng,
-              newPos.heading, newPos.speedKmh);
-          _recordTrailPoint(bus.id.toString(), newPos.lat, newPos.lng);
-          _redraw();
-        });
+        final channel = _service.subscribeBusPosition(
+          bus.id,
+          (newPos) {
+            child.livePosition = newPos;
+            _updateFacing(bus.id.toString(), newPos.lat, newPos.lng,
+                newPos.heading, newPos.speedKmh);
+            _recordTrailPoint(bus.id.toString(), newPos.lat, newPos.lng);
+            if (mounted) setState(() => _lastRefreshed = DateTime.now());
+            _redraw();
+          },
+          onConnectionChange: (connected) {
+            if (!mounted) return;
+            setState(() => _liveConnected = connected);
+          },
+        );
         _channels.add(channel);
       }
 
       setState(() {
         _children = children;
         _loading = false;
+        _refreshing = false;
+        _lastRefreshed = DateTime.now();
       });
+      _startFallbackPolling();
       _redraw();
     } catch (e) {
       setState(() {
-        _error = 'Could not load your children. Pull to retry.';
+        // On a refresh, keep showing the map we already have.
+        if (!silent) _error = 'Could not load your children. Pull to retry.';
         _loading = false;
+        _refreshing = false;
       });
+      if (silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not refresh. Check your connection.')),
+        );
+      }
     }
+  }
+
+  Future<void> _refresh() async {
+    if (_refreshing) return;
+    await _load(silent: true);
   }
 
   // Adds a point to this bus's trail, skipping GPS noise while parked.
@@ -236,6 +335,9 @@ class _MapScreenState extends State<MapScreen> {
   Uint8List? _stopIcon;
   Uint8List? _busIconOriginal; // as drawn in the asset
   Uint8List? _busIconMirrored; // flipped horizontally in code
+  // Whether each marker came from a custom PNG (drawn larger) or from code.
+  bool _schoolIconIsCustom = false;
+  bool _stopIconIsCustom = false;
 
   Future<void> _onMapCreated(MapboxMap map) async {
     _map = map;
@@ -253,8 +355,8 @@ class _MapScreenState extends State<MapScreen> {
 
     // Build the school + stop marker images in code; load the bus image asset
     // and make a mirrored copy so the bus can face left or right.
-    _schoolIcon = await _buildMarker(_MarkerKind.school);
-    _stopIcon = await _buildMarker(_MarkerKind.stop);
+    _schoolIcon = await _loadMarkerImage(_schoolMarkerAsset, _MarkerKind.school);
+    _stopIcon = await _loadMarkerImage(_studentMarkerAsset, _MarkerKind.stop);
     _busIconOriginal = await _loadBusIcon();
     _busIconMirrored = await _mirrorPng(_busIconOriginal!);
     _redraw();
@@ -327,7 +429,7 @@ class _MapScreenState extends State<MapScreen> {
         geometry:
             Point(coordinates: Position(child.school.lng!, child.school.lat!)),
         image: _schoolIcon,
-        iconSize: 1.0,
+        iconSize: _schoolIconIsCustom ? _customMarkerIconSize : 1.0,
         iconAnchor: IconAnchor.BOTTOM,
         symbolSortKey: 1,
       ));
@@ -338,7 +440,7 @@ class _MapScreenState extends State<MapScreen> {
       points.add(PointAnnotationOptions(
         geometry: Point(coordinates: Position(stopLng, stopLat)),
         image: _stopIcon,
-        iconSize: 1.0,
+        iconSize: _stopIconIsCustom ? _customMarkerIconSize : 1.0,
         iconAnchor: IconAnchor.BOTTOM,
         symbolSortKey: 2,
       ));
@@ -363,6 +465,22 @@ class _MapScreenState extends State<MapScreen> {
     if (mounted) setState(() {});
 
     await _fitCamera(child);
+  }
+
+  /// Uses the custom PNG at [assetPath] when it exists, otherwise falls back
+  /// to the pin drawn in code — so missing artwork never breaks the map.
+  Future<Uint8List> _loadMarkerImage(String assetPath, _MarkerKind kind) async {
+    try {
+      final data = await rootBundle.load(assetPath);
+      if (kind == _MarkerKind.school) {
+        _schoolIconIsCustom = true;
+      } else {
+        _stopIconIsCustom = true;
+      }
+      return data.buffer.asUint8List();
+    } catch (_) {
+      return _buildMarker(kind);
+    }
   }
 
   // Loads the school-bus PNG asset as bytes.
@@ -546,10 +664,18 @@ class _MapScreenState extends State<MapScreen> {
                         child: _ChildrenBar(
                           children: _children,
                           selectedIndex: _selectedIndex,
+                          refreshing: _refreshing,
+                          lastRefreshed: _lastRefreshed,
+                          onRefresh: _refresh,
                           onSelect: _selectChild,
                           onOpenNotifications: () {
                             Navigator.of(context).push(MaterialPageRoute(
                               builder: (_) => const NotificationsScreen(),
+                            ));
+                          },
+                          onChangePassword: () {
+                            Navigator.of(context).push(MaterialPageRoute(
+                              builder: (_) => const ChangePasswordScreen(),
                             ));
                           },
                           onSignOut: () => _service.signOut(),
@@ -563,6 +689,7 @@ class _MapScreenState extends State<MapScreen> {
                           child: _BusDetailsSheet(
                             child: selected,
                             onRoute: _isBusOnRoute(selected),
+                            liveConnected: _liveConnected,
                           ),
                         ),
                     ],
@@ -575,16 +702,34 @@ class _MapScreenState extends State<MapScreen> {
 class _ChildrenBar extends StatelessWidget {
   final List<Child> children;
   final int selectedIndex;
+  final bool refreshing;
+  final DateTime? lastRefreshed;
+  final VoidCallback onRefresh;
   final ValueChanged<int> onSelect;
   final VoidCallback onOpenNotifications;
+  final VoidCallback onChangePassword;
   final VoidCallback onSignOut;
   const _ChildrenBar({
     required this.children,
     required this.selectedIndex,
+    required this.refreshing,
+    required this.lastRefreshed,
+    required this.onRefresh,
     required this.onSelect,
     required this.onOpenNotifications,
+    required this.onChangePassword,
     required this.onSignOut,
   });
+
+  String get _refreshTooltip {
+    if (refreshing) return 'Refreshing\u2026';
+    final t = lastRefreshed;
+    if (t == null) return 'Refresh';
+    final d = DateTime.now().difference(t);
+    if (d.inSeconds < 60) return 'Updated just now';
+    if (d.inMinutes < 60) return 'Updated ${d.inMinutes} min ago';
+    return 'Updated ${d.inHours} h ago';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -645,15 +790,48 @@ class _ChildrenBar extends StatelessWidget {
             ),
           ),
           IconButton(
+            icon: refreshing
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.4, color: AppColors.accent),
+                  )
+                : const Icon(Icons.refresh_rounded, color: AppColors.ink),
+            onPressed: refreshing ? null : onRefresh,
+            tooltip: _refreshTooltip,
+          ),
+          IconButton(
             icon: const Icon(Icons.notifications_none_rounded,
                 color: AppColors.ink),
             onPressed: onOpenNotifications,
             tooltip: 'Notifications',
           ),
-          IconButton(
-            icon: const Icon(Icons.logout, color: AppColors.inkFaint),
-            onPressed: onSignOut,
-            tooltip: 'Sign out',
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded, color: AppColors.inkFaint),
+            tooltip: 'More',
+            onSelected: (value) {
+              if (value == 'password') onChangePassword();
+              if (value == 'signout') onSignOut();
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'password',
+                child: Row(children: [
+                  Icon(Icons.lock_outline_rounded, size: 20, color: AppColors.inkSoft),
+                  SizedBox(width: 10),
+                  Text('Change password'),
+                ]),
+              ),
+              PopupMenuItem(
+                value: 'signout',
+                child: Row(children: [
+                  Icon(Icons.logout, size: 20, color: AppColors.inkSoft),
+                  SizedBox(width: 10),
+                  Text('Sign out'),
+                ]),
+              ),
+            ],
           ),
         ],
       ),
@@ -698,7 +876,10 @@ class _BusDetailsSheet extends StatelessWidget {
   /// null = can't tell yet (no live position or no route).
   final bool? onRoute;
 
-  const _BusDetailsSheet({required this.child, this.onRoute});
+  /// Whether the live (WebSocket) feed is currently connected.
+  final bool liveConnected;
+
+  const _BusDetailsSheet({required this.child, this.onRoute, this.liveConnected = false});
 
   @override
   Widget build(BuildContext context) {
@@ -764,6 +945,21 @@ class _BusDetailsSheet extends StatelessWidget {
                       fontSize: 17,
                       fontWeight: FontWeight.w700,
                       color: AppColors.ink)),
+              const SizedBox(width: 8),
+              if (liveConnected)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.goSoft,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: const Text('LIVE',
+                      style: TextStyle(
+                          fontSize: 10,
+                          letterSpacing: 0.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.go)),
+                ),
               const Spacer(),
               Container(
                 padding:

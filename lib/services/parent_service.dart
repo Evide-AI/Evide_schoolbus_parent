@@ -172,8 +172,26 @@ class ParentService {
     );
   }
 
-  /// Realtime subscription to a bus's live position. Calls [onUpdate] on change.
-  RealtimeChannel subscribeBusPosition(String busId, void Function(BusPosition) onUpdate) {
+  /// Drops this device's token, so a phone that has signed out stops getting
+  /// alarms meant for the previous parent.
+  Future<void> removeDeviceToken(String fcmToken) async {
+    try {
+      await _db.from('device_tokens').delete().eq('fcm_token', fcmToken);
+    } catch (_) {/* best effort */}
+  }
+
+  /// Realtime subscription to a bus's live position, over Supabase Realtime's
+  /// WebSocket. Calls [onUpdate] whenever the row changes, and
+  /// [onConnectionChange] as the socket joins or drops, so the UI can show a
+  /// live indicator and fall back to polling while it's down.
+  ///
+  /// The `bus_live_position` table must be in the `supabase_realtime`
+  /// publication or this subscribes successfully but never receives anything.
+  RealtimeChannel subscribeBusPosition(
+    String busId,
+    void Function(BusPosition) onUpdate, {
+    void Function(bool connected)? onConnectionChange,
+  }) {
     final channel = _db.channel('bus_pos_$busId');
     channel
         .onPostgresChanges(
@@ -190,8 +208,62 @@ class ParentService {
             if (rec.isNotEmpty) onUpdate(BusPosition.fromMap(rec));
           },
         )
-        .subscribe();
+        .subscribe((status, error) {
+      onConnectionChange?.call(status == RealtimeSubscribeStatus.subscribed);
+    });
     return channel;
+  }
+
+  /// Signs in with a phone number instead of an email.
+  ///
+  /// Parents may hold either an email login or a phone-only login, so the
+  /// `parent-login` Edge Function resolves the number to the right account
+  /// server-side, checks the password, and hands back a session. Doing the
+  /// lookup in the app would reveal which numbers are registered.
+  Future<void> signInWithPhone({
+    required String phone,
+    required String password,
+  }) async {
+    String? refreshToken;
+    try {
+      final res = await _db.functions.invoke('parent-login', body: {
+        'phone': phone.trim(),
+        'password': password,
+      });
+      final data = res.data;
+      refreshToken = data is Map ? data['refresh_token'] as String? : null;
+    } on FunctionException catch (e) {
+      // A wrong password, an unknown number, or a deactivated account.
+      final details = e.details;
+      final message = details is Map ? details['error'] as String? : null;
+      throw AuthException(message ?? 'Phone number or password is incorrect.');
+    }
+
+    if (refreshToken == null) {
+      throw AuthException('Phone number or password is incorrect.');
+    }
+    await _db.auth.setSession(refreshToken);
+  }
+
+  /// Asks the school office to reset this parent's password.
+  ///
+  /// Runs as an anonymous user (the parent can't sign in), so it goes through
+  /// the `request_password_reset` database function, which rate-limits requests
+  /// and matches the identifier to an account server-side. It never reports
+  /// whether the account exists.
+  Future<void> requestPasswordReset({
+    required String identifier,
+    required String contactPhone,
+  }) async {
+    await _db.rpc('request_password_reset', params: {
+      'p_identifier': identifier.trim(),
+      'p_contact_phone': contactPhone.trim(),
+    });
+  }
+
+  /// Sets a new password for the signed-in parent.
+  Future<void> updatePassword(String newPassword) async {
+    await _db.auth.updateUser(UserAttributes(password: newPassword));
   }
 
   Future<void> signOut() => _db.auth.signOut();

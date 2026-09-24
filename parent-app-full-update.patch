@@ -1,0 +1,1659 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index b511f07..4e77acc 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -1,6 +1,13 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <!-- Android 13+ won't show any notification without this at runtime. -->
++    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
++    <uses-permission android:name="android.permission.VIBRATE"/>
++    <!-- Lets the alarm wake the screen when the bus is arriving. -->
++    <uses-permission android:name="android.permission.WAKE_LOCK"/>
++    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
++    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+     <application
+-        android:label="parent"
++        android:label="Evide Parent"
+         android:name="${applicationName}"
+         android:icon="@mipmap/ic_launcher">
+         <activity
+@@ -25,6 +32,16 @@
+                 <category android:name="android.intent.category.LAUNCHER"/>
+             </intent-filter>
+         </activity>
++        <!-- Channel used when a push doesn't name one. Matches the alarm
++             channel created in AlarmService, so a notification arriving before
++             the app has ever run still rings. -->
++        <meta-data
++            android:name="com.google.firebase.messaging.default_notification_channel_id"
++            android:value="proximity_alarm_v2" />
++        <meta-data
++            android:name="com.google.firebase.messaging.default_notification_icon"
++            android:resource="@mipmap/ic_launcher" />
++
+         <!-- Don't delete the meta-data below.
+              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+         <meta-data
+diff --git a/android/app/src/main/res/raw/alarm.mp3 b/android/app/src/main/res/raw/alarm.mp3
+new file mode 100644
+index 0000000000000000000000000000000000000000..42d14d87c9bfc8e07097c5725e7cb33005e32911
+GIT binary patch
+literal 18113
+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
+K8i9ZB=Dz?-WzL-d
+
+literal 0
+HcmV?d00001
+
+diff --git a/lib/screens/change_password_screen.dart b/lib/screens/change_password_screen.dart
+new file mode 100644
+index 0000000..17f583a
+--- /dev/null
++++ b/lib/screens/change_password_screen.dart
+@@ -0,0 +1,136 @@
++import 'package:flutter/material.dart';
++import 'package:supabase_flutter/supabase_flutter.dart';
++import '../services/parent_service.dart';
++import '../theme.dart';
++
++/// Lets a signed-in parent set their own password, so they don't have to keep
++/// the one the school sent them on WhatsApp.
++class ChangePasswordScreen extends StatefulWidget {
++  const ChangePasswordScreen({super.key});
++
++  @override
++  State<ChangePasswordScreen> createState() => _ChangePasswordScreenState();
++}
++
++class _ChangePasswordScreenState extends State<ChangePasswordScreen> {
++  final _service = ParentService();
++  final _newCtrl = TextEditingController();
++  final _confirmCtrl = TextEditingController();
++
++  bool _obscure = true;
++  bool _saving = false;
++  String? _error;
++
++  @override
++  void dispose() {
++    _newCtrl.dispose();
++    _confirmCtrl.dispose();
++    super.dispose();
++  }
++
++  Future<void> _save() async {
++    final pw = _newCtrl.text;
++    if (pw.length < 8) {
++      setState(() => _error = 'Use at least 8 characters.');
++      return;
++    }
++    if (pw != _confirmCtrl.text) {
++      setState(() => _error = 'The two passwords don\u2019t match.');
++      return;
++    }
++
++    setState(() {
++      _saving = true;
++      _error = null;
++    });
++    try {
++      await _service.updatePassword(pw);
++      if (!mounted) return;
++      ScaffoldMessenger.of(context).showSnackBar(
++        const SnackBar(content: Text('Password changed.')),
++      );
++      Navigator.of(context).pop();
++    } on AuthException catch (e) {
++      setState(() {
++        _error = e.message;
++        _saving = false;
++      });
++    } catch (_) {
++      setState(() {
++        _error = 'Could not change the password. Check your connection and try again.';
++        _saving = false;
++      });
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      appBar: AppBar(title: const Text('Change password')),
++      body: SafeArea(
++        child: Center(
++          child: SingleChildScrollView(
++            padding: const EdgeInsets.all(28),
++            child: ConstrainedBox(
++              constraints: const BoxConstraints(maxWidth: 380),
++              child: Column(
++                crossAxisAlignment: CrossAxisAlignment.stretch,
++                children: [
++                  const Text(
++                    'Choose a new password',
++                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.ink),
++                  ),
++                  const SizedBox(height: 8),
++                  const Text(
++                    'You\u2019ll use this the next time you sign in.',
++                    style: TextStyle(color: AppColors.inkFaint),
++                  ),
++                  const SizedBox(height: 24),
++                  if (_error != null) ...[
++                    Container(
++                      padding: const EdgeInsets.all(12),
++                      decoration: BoxDecoration(
++                        color: AppColors.stopSoft,
++                        borderRadius: BorderRadius.circular(8),
++                      ),
++                      child: Text(_error!, style: const TextStyle(color: AppColors.stop)),
++                    ),
++                    const SizedBox(height: 16),
++                  ],
++                  TextField(
++                    controller: _newCtrl,
++                    obscureText: _obscure,
++                    decoration: InputDecoration(
++                      labelText: 'New password',
++                      helperText: 'At least 8 characters',
++                      suffixIcon: IconButton(
++                        icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
++                        onPressed: () => setState(() => _obscure = !_obscure),
++                      ),
++                    ),
++                  ),
++                  const SizedBox(height: 14),
++                  TextField(
++                    controller: _confirmCtrl,
++                    obscureText: _obscure,
++                    decoration: const InputDecoration(labelText: 'Repeat new password'),
++                    onSubmitted: (_) => _saving ? null : _save(),
++                  ),
++                  const SizedBox(height: 22),
++                  FilledButton(
++                    onPressed: _saving ? null : _save,
++                    style: FilledButton.styleFrom(
++                      backgroundColor: AppColors.accent,
++                      padding: const EdgeInsets.symmetric(vertical: 15),
++                    ),
++                    child: Text(_saving ? 'Saving\u2026' : 'Save password'),
++                  ),
++                ],
++              ),
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/screens/forgot_password_screen.dart b/lib/screens/forgot_password_screen.dart
+new file mode 100644
+index 0000000..f72bec3
+--- /dev/null
++++ b/lib/screens/forgot_password_screen.dart
+@@ -0,0 +1,175 @@
++import 'package:flutter/material.dart';
++import '../services/parent_service.dart';
++import '../theme.dart';
++
++/// "Forgot password" for parents.
++///
++/// Parents have no email inbox tied to their login and we don't send SMS, so
++/// the request goes to the school office instead: they reset the password from
++/// the management dashboard and send the new one on WhatsApp.
++///
++/// The screen never says whether an account exists — that would let anyone
++/// check which numbers are registered — so every valid submission shows the
++/// same confirmation.
++class ForgotPasswordScreen extends StatefulWidget {
++  const ForgotPasswordScreen({super.key});
++
++  @override
++  State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
++}
++
++class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
++  final _service = ParentService();
++  final _identifierCtrl = TextEditingController();
++  final _phoneCtrl = TextEditingController();
++
++  bool _submitting = false;
++  bool _sent = false;
++  String? _error;
++
++  @override
++  void dispose() {
++    _identifierCtrl.dispose();
++    _phoneCtrl.dispose();
++    super.dispose();
++  }
++
++  Future<void> _submit() async {
++    final identifier = _identifierCtrl.text.trim();
++    final phone = _phoneCtrl.text.trim();
++    if (identifier.isEmpty) {
++      setState(() => _error = 'Enter the email or phone number you sign in with.');
++      return;
++    }
++    if (phone.replaceAll(RegExp(r'\D'), '').length < 10) {
++      setState(() => _error = 'Enter a 10-digit mobile number the school can reach you on.');
++      return;
++    }
++
++    setState(() {
++      _submitting = true;
++      _error = null;
++    });
++    try {
++      await _service.requestPasswordReset(identifier: identifier, contactPhone: phone);
++      if (mounted) setState(() => _sent = true);
++    } catch (e) {
++      if (mounted) {
++        setState(() {
++          _error = 'Could not send the request. Check your connection and try again.';
++          _submitting = false;
++        });
++      }
++    }
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    return Scaffold(
++      appBar: AppBar(title: const Text('Forgot password')),
++      body: SafeArea(
++        child: Center(
++          child: SingleChildScrollView(
++            padding: const EdgeInsets.all(28),
++            child: ConstrainedBox(
++              constraints: const BoxConstraints(maxWidth: 380),
++              child: _sent ? _sentView() : _formView(),
++            ),
++          ),
++        ),
++      ),
++    );
++  }
++
++  Widget _sentView() {
++    return Column(
++      crossAxisAlignment: CrossAxisAlignment.stretch,
++      children: [
++        const Icon(Icons.check_circle_rounded, size: 56, color: AppColors.go),
++        const SizedBox(height: 18),
++        const Text(
++          'Request sent',
++          textAlign: TextAlign.center,
++          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.ink),
++        ),
++        const SizedBox(height: 10),
++        const Text(
++          'Your school office will set a new password and send it to you on WhatsApp. '
++          'This usually happens on the next working day.',
++          textAlign: TextAlign.center,
++          style: TextStyle(color: AppColors.inkSoft, height: 1.5),
++        ),
++        const SizedBox(height: 26),
++        FilledButton(
++          onPressed: () => Navigator.of(context).pop(),
++          style: FilledButton.styleFrom(
++            backgroundColor: AppColors.accent,
++            padding: const EdgeInsets.symmetric(vertical: 15),
++          ),
++          child: const Text('Back to sign in'),
++        ),
++      ],
++    );
++  }
++
++  Widget _formView() {
++    return Column(
++      crossAxisAlignment: CrossAxisAlignment.stretch,
++      children: [
++        const Text(
++          'Ask your school for a new password',
++          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: AppColors.ink),
++        ),
++        const SizedBox(height: 8),
++        const Text(
++          'The school office will set a new password and send it to you on WhatsApp.',
++          style: TextStyle(color: AppColors.inkFaint, height: 1.5),
++        ),
++        const SizedBox(height: 24),
++        if (_error != null) ...[
++          Container(
++            padding: const EdgeInsets.all(12),
++            decoration: BoxDecoration(
++              color: AppColors.stopSoft,
++              borderRadius: BorderRadius.circular(8),
++            ),
++            child: Text(_error!, style: const TextStyle(color: AppColors.stop)),
++          ),
++          const SizedBox(height: 16),
++        ],
++        TextField(
++          controller: _identifierCtrl,
++          autocorrect: false,
++          keyboardType: TextInputType.emailAddress,
++          decoration: const InputDecoration(
++            labelText: 'Email or phone you sign in with',
++          ),
++        ),
++        const SizedBox(height: 14),
++        TextField(
++          controller: _phoneCtrl,
++          keyboardType: TextInputType.phone,
++          decoration: const InputDecoration(
++            labelText: 'WhatsApp number',
++            prefixText: '+91 ',
++            helperText: 'The school sends the new password here.',
++          ),
++        ),
++        const SizedBox(height: 22),
++        FilledButton(
++          onPressed: _submitting ? null : _submit,
++          style: FilledButton.styleFrom(
++            backgroundColor: AppColors.accent,
++            padding: const EdgeInsets.symmetric(vertical: 15),
++          ),
++          child: Text(_submitting ? 'Sending\u2026' : 'Send request to school'),
++        ),
++        const SizedBox(height: 10),
++        TextButton(
++          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
++          child: const Text('Back to sign in'),
++        ),
++      ],
++    );
++  }
++}
+diff --git a/lib/screens/login_screen.dart b/lib/screens/login_screen.dart
+index 4b679ac..e78ce57 100644
+--- a/lib/screens/login_screen.dart
++++ b/lib/screens/login_screen.dart
+@@ -1,6 +1,10 @@
+ import 'package:flutter/material.dart';
+ import 'package:supabase_flutter/supabase_flutter.dart';
++import '../services/parent_service.dart';
+ import '../theme.dart';
++import 'forgot_password_screen.dart';
++
++enum _LoginMode { phone, email }
+ 
+ class LoginScreen extends StatefulWidget {
+   const LoginScreen({super.key});
+@@ -9,25 +13,54 @@ class LoginScreen extends StatefulWidget {
+ }
+ 
+ class _LoginScreenState extends State<LoginScreen> {
++  final _service = ParentService();
+   final _emailCtrl = TextEditingController();
++  final _phoneCtrl = TextEditingController();
+   final _passwordCtrl = TextEditingController();
++
++  // Most parents were given a phone login, so that's the default.
++  _LoginMode _mode = _LoginMode.phone;
+   bool _submitting = false;
++  bool _obscure = true;
+   String? _error;
+ 
+   @override
+   void dispose() {
+     _emailCtrl.dispose();
++    _phoneCtrl.dispose();
+     _passwordCtrl.dispose();
+     super.dispose();
+   }
+ 
++  bool get _phoneLooksValid =>
++      RegExp(r'^[6-9]\d{9}$').hasMatch(_phoneCtrl.text.replaceAll(RegExp(r'\D'), ''));
++
+   Future<void> _signIn() async {
+-    setState(() { _submitting = true; _error = null; });
++    if (_mode == _LoginMode.phone && !_phoneLooksValid) {
++      setState(() => _error = 'Enter your 10-digit mobile number.');
++      return;
++    }
++    if (_passwordCtrl.text.isEmpty) {
++      setState(() => _error = 'Enter your password.');
++      return;
++    }
++
++    setState(() {
++      _submitting = true;
++      _error = null;
++    });
+     try {
+-      await Supabase.instance.client.auth.signInWithPassword(
+-        email: _emailCtrl.text.trim(),
+-        password: _passwordCtrl.text,
+-      );
++      if (_mode == _LoginMode.phone) {
++        await _service.signInWithPhone(
++          phone: _phoneCtrl.text.trim(),
++          password: _passwordCtrl.text,
++        );
++      } else {
++        await Supabase.instance.client.auth.signInWithPassword(
++          email: _emailCtrl.text.trim(),
++          password: _passwordCtrl.text,
++        );
++      }
+     } on AuthException catch (e) {
+       setState(() {
+         _error = e.message == 'Invalid login credentials'
+@@ -43,6 +76,14 @@ class _LoginScreenState extends State<LoginScreen> {
+     }
+   }
+ 
++  void _switchMode(_LoginMode mode) {
++    if (_mode == mode) return;
++    setState(() {
++      _mode = mode;
++      _error = null;
++    });
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Scaffold(
+@@ -70,7 +111,11 @@ class _LoginScreenState extends State<LoginScreen> {
+                   const SizedBox(height: 6),
+                   const Text('Sign in to see your child\u2019s bus in real time.',
+                       style: TextStyle(color: AppColors.inkFaint)),
+-                  const SizedBox(height: 28),
++                  const SizedBox(height: 22),
++
++                  _ModeSwitch(mode: _mode, onChanged: _submitting ? null : _switchMode),
++                  const SizedBox(height: 18),
++
+                   if (_error != null) ...[
+                     Container(
+                       padding: const EdgeInsets.all(12),
+@@ -79,17 +124,36 @@ class _LoginScreenState extends State<LoginScreen> {
+                     ),
+                     const SizedBox(height: 16),
+                   ],
+-                  TextField(
+-                    controller: _emailCtrl,
+-                    keyboardType: TextInputType.emailAddress,
+-                    autocorrect: false,
+-                    decoration: const InputDecoration(labelText: 'Email'),
+-                  ),
++
++                  if (_mode == _LoginMode.phone)
++                    TextField(
++                      controller: _phoneCtrl,
++                      keyboardType: TextInputType.phone,
++                      autocorrect: false,
++                      decoration: const InputDecoration(
++                        labelText: 'Mobile number',
++                        prefixText: '+91 ',
++                      ),
++                    )
++                  else
++                    TextField(
++                      controller: _emailCtrl,
++                      keyboardType: TextInputType.emailAddress,
++                      autocorrect: false,
++                      decoration: const InputDecoration(labelText: 'Email'),
++                    ),
++
+                   const SizedBox(height: 14),
+                   TextField(
+                     controller: _passwordCtrl,
+-                    obscureText: true,
+-                    decoration: const InputDecoration(labelText: 'Password'),
++                    obscureText: _obscure,
++                    decoration: InputDecoration(
++                      labelText: 'Password',
++                      suffixIcon: IconButton(
++                        icon: Icon(_obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
++                        onPressed: () => setState(() => _obscure = !_obscure),
++                      ),
++                    ),
+                     onSubmitted: (_) => _submitting ? null : _signIn(),
+                   ),
+                   const SizedBox(height: 22),
+@@ -101,6 +165,15 @@ class _LoginScreenState extends State<LoginScreen> {
+                     ),
+                     child: Text(_submitting ? 'Signing in\u2026' : 'Sign in'),
+                   ),
++                  const SizedBox(height: 6),
++                  TextButton(
++                    onPressed: _submitting
++                        ? null
++                        : () => Navigator.of(context).push(MaterialPageRoute(
++                              builder: (_) => const ForgotPasswordScreen(),
++                            )),
++                    child: const Text('Forgot password?'),
++                  ),
+                 ],
+               ),
+             ),
+@@ -110,3 +183,63 @@ class _LoginScreenState extends State<LoginScreen> {
+     );
+   }
+ }
++
++/// Phone / Email toggle above the sign-in fields.
++class _ModeSwitch extends StatelessWidget {
++  final _LoginMode mode;
++  final ValueChanged<_LoginMode>? onChanged;
++  const _ModeSwitch({required this.mode, required this.onChanged});
++
++  @override
++  Widget build(BuildContext context) {
++    return Container(
++      padding: const EdgeInsets.all(3),
++      decoration: BoxDecoration(
++        color: AppColors.paper,
++        borderRadius: BorderRadius.circular(10),
++        border: Border.all(color: AppColors.line),
++      ),
++      child: Row(
++        children: [
++          _tab(_LoginMode.phone, 'Mobile number', Icons.phone_iphone_rounded),
++          _tab(_LoginMode.email, 'Email', Icons.alternate_email_rounded),
++        ],
++      ),
++    );
++  }
++
++  Widget _tab(_LoginMode value, String label, IconData icon) {
++    final selected = mode == value;
++    return Expanded(
++      child: GestureDetector(
++        onTap: onChanged == null ? null : () => onChanged!(value),
++        child: AnimatedContainer(
++          duration: const Duration(milliseconds: 140),
++          padding: const EdgeInsets.symmetric(vertical: 10),
++          decoration: BoxDecoration(
++            color: selected ? Colors.white : Colors.transparent,
++            borderRadius: BorderRadius.circular(8),
++            boxShadow: selected
++                ? const [BoxShadow(color: Color(0x14202B49), blurRadius: 6, offset: Offset(0, 2))]
++                : null,
++          ),
++          child: Row(
++            mainAxisAlignment: MainAxisAlignment.center,
++            children: [
++              Icon(icon, size: 18, color: selected ? AppColors.accent : AppColors.inkFaint),
++              const SizedBox(width: 7),
++              Text(
++                label,
++                style: TextStyle(
++                  fontSize: 14,
++                  fontWeight: FontWeight.w600,
++                  color: selected ? AppColors.ink : AppColors.inkFaint,
++                ),
++              ),
++            ],
++          ),
++        ),
++      ),
++    );
++  }
++}
+diff --git a/lib/screens/map_screen.dart b/lib/screens/map_screen.dart
+index ad0c02b..cb8f4f8 100644
+--- a/lib/screens/map_screen.dart
++++ b/lib/screens/map_screen.dart
+@@ -1,3 +1,4 @@
++import 'dart:async';
+ import 'dart:typed_data';
+ import 'dart:math' as math;
+ import 'dart:ui' as ui;
+@@ -10,6 +11,7 @@ import '../models/models.dart';
+ import '../services/parent_service.dart';
+ import '../theme.dart';
+ import '../utils/route_trail.dart';
++import 'change_password_screen.dart';
+ import 'notifications_screen.dart';
+ 
+ enum _MarkerKind { school, stop, bus }
+@@ -34,13 +36,28 @@ const double _trailToleranceM = 60; // how far off the blue line still counts
+ const double _minTrailMove = 8; // metres before a new trail point is kept
+ const int _maxTrailPoints = 800; // keeps memory and drawing cost bounded
+ 
++// Optional custom marker images. Drop your own PNGs at these paths (square,
++// ~512x512, transparent background, subject centred — the point of a pin
++// should sit at the bottom edge, since markers are anchored there).
++// If a file is missing, the app falls back to the pin drawn in code, so
++// nothing breaks before you add them.
++const String _schoolMarkerAsset = 'assets/markers/school_marker.png';
++const String _studentMarkerAsset = 'assets/markers/student_marker.png';
++// On-screen size of the custom images. Raise for bigger markers.
++const double _customMarkerIconSize = 0.55;
++
++// Live updates arrive over Supabase Realtime (a WebSocket). If that socket
++// drops — patchy mobile data, or Android freezing the app in the background —
++// we fall back to asking for the latest position on a timer until it's back.
++const Duration _fallbackPollInterval = Duration(seconds: 20);
++
+ class MapScreen extends StatefulWidget {
+   const MapScreen({super.key});
+   @override
+   State<MapScreen> createState() => _MapScreenState();
+ }
+ 
+-class _MapScreenState extends State<MapScreen> {
++class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
+   final _service = ParentService();
+ 
+   MapboxMap? _map;
+@@ -50,10 +67,17 @@ class _MapScreenState extends State<MapScreen> {
+   List<Child> _children = [];
+   int _selectedIndex = 0;
+   bool _loading = true;
++  bool _refreshing = false;
++  DateTime? _lastRefreshed;
+   String? _error;
+ 
+   final List<RealtimeChannel> _channels = [];
+ 
++  // Realtime (WebSocket) health: true once the position channels have joined.
++  // While it's false, _pollTimer fetches positions on a timer instead.
++  bool _liveConnected = false;
++  Timer? _pollTimer;
++
+   // Per-bus direction state (keyed by bus id).
+   final Map<String, bool> _busFacingRight = {};
+   final Map<String, ({double lat, double lng})> _lastBusPoint = {};
+@@ -64,23 +88,74 @@ class _MapScreenState extends State<MapScreen> {
+   @override
+   void initState() {
+     super.initState();
++    WidgetsBinding.instance.addObserver(this);
+     MapboxOptions.setAccessToken(AppConfig.mapboxPublicToken);
+     _load();
+   }
+ 
+   @override
+   void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
++    _pollTimer?.cancel();
+     for (final ch in _channels) {
+       ch.unsubscribe();
+     }
+     super.dispose();
+   }
+ 
+-  Future<void> _load() async {
++  /// Android and iOS suspend the WebSocket while the app is in the background,
++  /// and it doesn't always come back on its own. Reconnecting on resume is what
++  /// keeps tracking live after the parent locks their phone and returns.
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    if (state == AppLifecycleState.resumed && _children.isNotEmpty) {
++      _load(silent: true);
++    }
++  }
++
++  /// Safety net for when the socket is down: ask for the latest position
++  /// directly. Stops as soon as Realtime is connected again.
++  void _startFallbackPolling() {
++    _pollTimer?.cancel();
++    _pollTimer = Timer.periodic(_fallbackPollInterval, (_) async {
++      if (!mounted || _liveConnected) return;
++      for (final child in _children) {
++        final bus = child.bus;
++        if (bus == null) continue;
++        final pos = await _service.fetchBusPosition(bus.id);
++        if (pos == null) continue;
++        child.livePosition = pos;
++        _updateFacing(bus.id.toString(), pos.lat, pos.lng, pos.heading, pos.speedKmh);
++        _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
++      }
++      if (mounted) {
++        setState(() => _lastRefreshed = DateTime.now());
++        _redraw();
++      }
++    });
++  }
++
++  /// Loads everything: children, their routes, and live bus positions.
++  /// [silent] keeps the map on screen (used by the refresh button) instead of
++  /// replacing it with a full-screen spinner.
++  Future<void> _load({bool silent = false}) async {
+     setState(() {
+-      _loading = true;
++      if (silent) {
++        _refreshing = true;
++      } else {
++        _loading = true;
++      }
+       _error = null;
+     });
++
++    // Drop existing realtime subscriptions, or a refresh would stack a second
++    // set of listeners on top of the first.
++    for (final ch in _channels) {
++      ch.unsubscribe();
++    }
++    _channels.clear();
++    _liveConnected = false;
++
+     try {
+       final children = await _service.loadChildren();
+       if (children.isEmpty) {
+@@ -88,6 +163,7 @@ class _MapScreenState extends State<MapScreen> {
+           _error =
+               'No children are linked to your account yet. Contact your school office.';
+           _loading = false;
++          _refreshing = false;
+         });
+         return;
+       }
+@@ -108,29 +184,52 @@ class _MapScreenState extends State<MapScreen> {
+           _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
+         }
+ 
+-        final channel = _service.subscribeBusPosition(bus.id, (newPos) {
+-          child.livePosition = newPos;
+-          _updateFacing(bus.id.toString(), newPos.lat, newPos.lng,
+-              newPos.heading, newPos.speedKmh);
+-          _recordTrailPoint(bus.id.toString(), newPos.lat, newPos.lng);
+-          _redraw();
+-        });
++        final channel = _service.subscribeBusPosition(
++          bus.id,
++          (newPos) {
++            child.livePosition = newPos;
++            _updateFacing(bus.id.toString(), newPos.lat, newPos.lng,
++                newPos.heading, newPos.speedKmh);
++            _recordTrailPoint(bus.id.toString(), newPos.lat, newPos.lng);
++            if (mounted) setState(() => _lastRefreshed = DateTime.now());
++            _redraw();
++          },
++          onConnectionChange: (connected) {
++            if (!mounted) return;
++            setState(() => _liveConnected = connected);
++          },
++        );
+         _channels.add(channel);
+       }
+ 
+       setState(() {
+         _children = children;
+         _loading = false;
++        _refreshing = false;
++        _lastRefreshed = DateTime.now();
+       });
++      _startFallbackPolling();
+       _redraw();
+     } catch (e) {
+       setState(() {
+-        _error = 'Could not load your children. Pull to retry.';
++        // On a refresh, keep showing the map we already have.
++        if (!silent) _error = 'Could not load your children. Pull to retry.';
+         _loading = false;
++        _refreshing = false;
+       });
++      if (silent && mounted) {
++        ScaffoldMessenger.of(context).showSnackBar(
++          const SnackBar(content: Text('Could not refresh. Check your connection.')),
++        );
++      }
+     }
+   }
+ 
++  Future<void> _refresh() async {
++    if (_refreshing) return;
++    await _load(silent: true);
++  }
++
+   // Adds a point to this bus's trail, skipping GPS noise while parked.
+   void _recordTrailPoint(String busId, double lat, double lng) {
+     final trail = _trails.putIfAbsent(busId, () => <GeoPoint>[]);
+@@ -236,6 +335,9 @@ class _MapScreenState extends State<MapScreen> {
+   Uint8List? _stopIcon;
+   Uint8List? _busIconOriginal; // as drawn in the asset
+   Uint8List? _busIconMirrored; // flipped horizontally in code
++  // Whether each marker came from a custom PNG (drawn larger) or from code.
++  bool _schoolIconIsCustom = false;
++  bool _stopIconIsCustom = false;
+ 
+   Future<void> _onMapCreated(MapboxMap map) async {
+     _map = map;
+@@ -253,8 +355,8 @@ class _MapScreenState extends State<MapScreen> {
+ 
+     // Build the school + stop marker images in code; load the bus image asset
+     // and make a mirrored copy so the bus can face left or right.
+-    _schoolIcon = await _buildMarker(_MarkerKind.school);
+-    _stopIcon = await _buildMarker(_MarkerKind.stop);
++    _schoolIcon = await _loadMarkerImage(_schoolMarkerAsset, _MarkerKind.school);
++    _stopIcon = await _loadMarkerImage(_studentMarkerAsset, _MarkerKind.stop);
+     _busIconOriginal = await _loadBusIcon();
+     _busIconMirrored = await _mirrorPng(_busIconOriginal!);
+     _redraw();
+@@ -327,7 +429,7 @@ class _MapScreenState extends State<MapScreen> {
+         geometry:
+             Point(coordinates: Position(child.school.lng!, child.school.lat!)),
+         image: _schoolIcon,
+-        iconSize: 1.0,
++        iconSize: _schoolIconIsCustom ? _customMarkerIconSize : 1.0,
+         iconAnchor: IconAnchor.BOTTOM,
+         symbolSortKey: 1,
+       ));
+@@ -338,7 +440,7 @@ class _MapScreenState extends State<MapScreen> {
+       points.add(PointAnnotationOptions(
+         geometry: Point(coordinates: Position(stopLng, stopLat)),
+         image: _stopIcon,
+-        iconSize: 1.0,
++        iconSize: _stopIconIsCustom ? _customMarkerIconSize : 1.0,
+         iconAnchor: IconAnchor.BOTTOM,
+         symbolSortKey: 2,
+       ));
+@@ -365,6 +467,22 @@ class _MapScreenState extends State<MapScreen> {
+     await _fitCamera(child);
+   }
+ 
++  /// Uses the custom PNG at [assetPath] when it exists, otherwise falls back
++  /// to the pin drawn in code — so missing artwork never breaks the map.
++  Future<Uint8List> _loadMarkerImage(String assetPath, _MarkerKind kind) async {
++    try {
++      final data = await rootBundle.load(assetPath);
++      if (kind == _MarkerKind.school) {
++        _schoolIconIsCustom = true;
++      } else {
++        _stopIconIsCustom = true;
++      }
++      return data.buffer.asUint8List();
++    } catch (_) {
++      return _buildMarker(kind);
++    }
++  }
++
+   // Loads the school-bus PNG asset as bytes.
+   Future<Uint8List> _loadBusIcon() async {
+     final data = await rootBundle.load('assets/bus_top.png');
+@@ -546,12 +664,20 @@ class _MapScreenState extends State<MapScreen> {
+                         child: _ChildrenBar(
+                           children: _children,
+                           selectedIndex: _selectedIndex,
++                          refreshing: _refreshing,
++                          lastRefreshed: _lastRefreshed,
++                          onRefresh: _refresh,
+                           onSelect: _selectChild,
+                           onOpenNotifications: () {
+                             Navigator.of(context).push(MaterialPageRoute(
+                               builder: (_) => const NotificationsScreen(),
+                             ));
+                           },
++                          onChangePassword: () {
++                            Navigator.of(context).push(MaterialPageRoute(
++                              builder: (_) => const ChangePasswordScreen(),
++                            ));
++                          },
+                           onSignOut: () => _service.signOut(),
+                         ),
+                       ),
+@@ -563,6 +689,7 @@ class _MapScreenState extends State<MapScreen> {
+                           child: _BusDetailsSheet(
+                             child: selected,
+                             onRoute: _isBusOnRoute(selected),
++                            liveConnected: _liveConnected,
+                           ),
+                         ),
+                     ],
+@@ -575,17 +702,35 @@ class _MapScreenState extends State<MapScreen> {
+ class _ChildrenBar extends StatelessWidget {
+   final List<Child> children;
+   final int selectedIndex;
++  final bool refreshing;
++  final DateTime? lastRefreshed;
++  final VoidCallback onRefresh;
+   final ValueChanged<int> onSelect;
+   final VoidCallback onOpenNotifications;
++  final VoidCallback onChangePassword;
+   final VoidCallback onSignOut;
+   const _ChildrenBar({
+     required this.children,
+     required this.selectedIndex,
++    required this.refreshing,
++    required this.lastRefreshed,
++    required this.onRefresh,
+     required this.onSelect,
+     required this.onOpenNotifications,
++    required this.onChangePassword,
+     required this.onSignOut,
+   });
+ 
++  String get _refreshTooltip {
++    if (refreshing) return 'Refreshing\u2026';
++    final t = lastRefreshed;
++    if (t == null) return 'Refresh';
++    final d = DateTime.now().difference(t);
++    if (d.inSeconds < 60) return 'Updated just now';
++    if (d.inMinutes < 60) return 'Updated ${d.inMinutes} min ago';
++    return 'Updated ${d.inHours} h ago';
++  }
++
+   @override
+   Widget build(BuildContext context) {
+     return Container(
+@@ -644,16 +789,49 @@ class _ChildrenBar extends StatelessWidget {
+               ),
+             ),
+           ),
++          IconButton(
++            icon: refreshing
++                ? const SizedBox(
++                    width: 20,
++                    height: 20,
++                    child: CircularProgressIndicator(
++                        strokeWidth: 2.4, color: AppColors.accent),
++                  )
++                : const Icon(Icons.refresh_rounded, color: AppColors.ink),
++            onPressed: refreshing ? null : onRefresh,
++            tooltip: _refreshTooltip,
++          ),
+           IconButton(
+             icon: const Icon(Icons.notifications_none_rounded,
+                 color: AppColors.ink),
+             onPressed: onOpenNotifications,
+             tooltip: 'Notifications',
+           ),
+-          IconButton(
+-            icon: const Icon(Icons.logout, color: AppColors.inkFaint),
+-            onPressed: onSignOut,
+-            tooltip: 'Sign out',
++          PopupMenuButton<String>(
++            icon: const Icon(Icons.more_vert_rounded, color: AppColors.inkFaint),
++            tooltip: 'More',
++            onSelected: (value) {
++              if (value == 'password') onChangePassword();
++              if (value == 'signout') onSignOut();
++            },
++            itemBuilder: (context) => const [
++              PopupMenuItem(
++                value: 'password',
++                child: Row(children: [
++                  Icon(Icons.lock_outline_rounded, size: 20, color: AppColors.inkSoft),
++                  SizedBox(width: 10),
++                  Text('Change password'),
++                ]),
++              ),
++              PopupMenuItem(
++                value: 'signout',
++                child: Row(children: [
++                  Icon(Icons.logout, size: 20, color: AppColors.inkSoft),
++                  SizedBox(width: 10),
++                  Text('Sign out'),
++                ]),
++              ),
++            ],
+           ),
+         ],
+       ),
+@@ -698,7 +876,10 @@ class _BusDetailsSheet extends StatelessWidget {
+   /// null = can't tell yet (no live position or no route).
+   final bool? onRoute;
+ 
+-  const _BusDetailsSheet({required this.child, this.onRoute});
++  /// Whether the live (WebSocket) feed is currently connected.
++  final bool liveConnected;
++
++  const _BusDetailsSheet({required this.child, this.onRoute, this.liveConnected = false});
+ 
+   @override
+   Widget build(BuildContext context) {
+@@ -764,6 +945,21 @@ class _BusDetailsSheet extends StatelessWidget {
+                       fontSize: 17,
+                       fontWeight: FontWeight.w700,
+                       color: AppColors.ink)),
++              const SizedBox(width: 8),
++              if (liveConnected)
++                Container(
++                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
++                  decoration: BoxDecoration(
++                    color: AppColors.goSoft,
++                    borderRadius: BorderRadius.circular(999),
++                  ),
++                  child: const Text('LIVE',
++                      style: TextStyle(
++                          fontSize: 10,
++                          letterSpacing: 0.5,
++                          fontWeight: FontWeight.w700,
++                          color: AppColors.go)),
++                ),
+               const Spacer(),
+               Container(
+                 padding:
+diff --git a/lib/services/alarm_service.dart b/lib/services/alarm_service.dart
+index ccd10ec..c611d38 100644
+--- a/lib/services/alarm_service.dart
++++ b/lib/services/alarm_service.dart
+@@ -1,10 +1,15 @@
+ import 'package:audioplayers/audioplayers.dart';
++import 'package:flutter/foundation.dart';
+ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+ 
+-// Handles the proximity alarm: plays a sound in the foreground and shows a
+-// high-priority local notification. Background/killed alarms are delivered by
+-// FCM (see main.dart's background handler) on the same 'proximity_alarm'
+-// channel so the phone rings even when the app isn't open.
++/// The proximity alarm: a loud, high-priority notification with the alarm tone,
++/// shown whether the app is open, in the background, or closed.
++///
++/// How the sound works on Android: from Android 8 the SOUND IS A PROPERTY OF
++/// THE CHANNEL, not of each notification, and a channel's settings are frozen
++/// once created. That's why the channel id carries a version — bumping it is
++/// the only way to change the tone for people who already have the app.
++/// The backend must send this exact id (see notificationWorker.js).
+ class AlarmService {
+   static final AlarmService _instance = AlarmService._();
+   factory AlarmService() => _instance;
+@@ -14,45 +19,71 @@ class AlarmService {
+   final _localNotifications = FlutterLocalNotificationsPlugin();
+   bool _initialized = false;
+ 
+-  static const alarmChannelId = 'proximity_alarm';
++  /// Bump the suffix if you ever change the sound or importance below.
++  static const alarmChannelId = 'proximity_alarm_v2';
++  static const alarmChannelName = 'Bus approaching alerts';
++  static const generalChannelId = 'general';
++
++  /// Needs android/app/src/main/res/raw/alarm.mp3 to exist.
++  static const _alarmSound = RawResourceAndroidNotificationSound('alarm');
+ 
+   Future<void> init() async {
+     if (_initialized) return;
+ 
+     const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+-    const iosInit = DarwinInitializationSettings();
++    const iosInit = DarwinInitializationSettings(
++      requestAlertPermission: true,
++      requestBadgePermission: true,
++      requestSoundPermission: true,
++    );
+     await _localNotifications.initialize(
+       const InitializationSettings(android: androidInit, iOS: iosInit),
+     );
+ 
+-    // High-importance channel so the notification pops and plays sound even in
+-    // the background. NOTE: to use a CUSTOM alarm sound, add a sound file at
+-    // android/app/src/main/res/raw/alarm.mp3 and set `sound:` below to
+-    // RawResourceAndroidNotificationSound('alarm'). Left as default here so it
+-    // works out-of-the-box before you add a sound asset.
+-    const channel = AndroidNotificationChannel(
++    final android = _localNotifications
++        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
++
++    // Alarm channel: max importance, alarm tone, vibration. Treated as an alarm
++    // by the system so it stays audible in Do Not Disturb's alarm exception.
++    await android?.createNotificationChannel(const AndroidNotificationChannel(
+       alarmChannelId,
+-      'Bus approaching alerts',
++      alarmChannelName,
+       description: 'Rings when your child\u2019s bus is near the pickup or drop point.',
+       importance: Importance.max,
+       playSound: true,
+-    );
+-    await _localNotifications
+-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+-        ?.createNotificationChannel(channel);
++      sound: _alarmSound,
++      audioAttributesUsage: AudioAttributesUsage.alarm,
++      enableVibration: true,
++      enableLights: true,
++    ));
++
++    // Everything else (bus started, school notices) stays quiet by comparison.
++    await android?.createNotificationChannel(const AndroidNotificationChannel(
++      generalChannelId,
++      'Bus updates',
++      description: 'Trip start and end, and notices from your school.',
++      importance: Importance.defaultImportance,
++    ));
++
++    // Android 13+ needs the runtime permission before anything can be shown.
++    await android?.requestNotificationsPermission();
+ 
+     _initialized = true;
+   }
+ 
+-  /// Called when a proximity alarm arrives while the app is in the foreground.
++  /// Shown when an alarm arrives while the app is on screen. Android suppresses
++  /// FCM's own notification in that case, so the app raises it instead.
+   Future<void> ringForeground({required String title, required String body}) async {
+     await init();
+-    // Play the alarm tone. Uses a bundled asset if present; otherwise this is a
+-    // no-op that won't crash. Add assets/alarm.mp3 and register it in pubspec
+-    // to enable the custom tone.
++
++    // The bundled tone, for the in-app case. The channel handles the sound when
++    // the notification comes from the system instead.
+     try {
++      await _player.setVolume(1.0);
+       await _player.play(AssetSource('alarm.mp3'));
+-    } catch (_) {/* no custom sound asset yet */}
++    } catch (e) {
++      debugPrint('Alarm tone skipped: $e');
++    }
+ 
+     await _localNotifications.show(
+       DateTime.now().millisecondsSinceEpoch ~/ 1000,
+@@ -61,12 +92,23 @@ class AlarmService {
+       const NotificationDetails(
+         android: AndroidNotificationDetails(
+           alarmChannelId,
+-          'Bus approaching alerts',
++          alarmChannelName,
+           importance: Importance.max,
+-          priority: Priority.high,
++          priority: Priority.max,
++          category: AndroidNotificationCategory.alarm,
+           playSound: true,
++          sound: _alarmSound,
++          audioAttributesUsage: AudioAttributesUsage.alarm,
++          enableVibration: true,
++          fullScreenIntent: true,
++          visibility: NotificationVisibility.public,
++        ),
++        iOS: DarwinNotificationDetails(
++          presentAlert: true,
++          presentSound: true,
++          sound: 'alarm.caf',
++          interruptionLevel: InterruptionLevel.timeSensitive,
+         ),
+-        iOS: DarwinNotificationDetails(presentSound: true),
+       ),
+     );
+   }
+diff --git a/lib/services/auth_gate.dart b/lib/services/auth_gate.dart
+index a03bd4c..1b61c07 100644
+--- a/lib/services/auth_gate.dart
++++ b/lib/services/auth_gate.dart
+@@ -40,7 +40,7 @@ class _AuthGateState extends State<AuthGate> {
+       if (session != null) {
+         PushService.instance.attach(_service);
+       } else {
+-        PushService.instance.detach();
++        PushService.instance.detach(service: _service);
+       }
+       if (mounted) setState(() => _session = session);
+     });
+diff --git a/lib/services/parent_service.dart b/lib/services/parent_service.dart
+index 7c3710b..01899a0 100644
+--- a/lib/services/parent_service.dart
++++ b/lib/services/parent_service.dart
+@@ -172,8 +172,26 @@ class ParentService {
+     );
+   }
+ 
+-  /// Realtime subscription to a bus's live position. Calls [onUpdate] on change.
+-  RealtimeChannel subscribeBusPosition(String busId, void Function(BusPosition) onUpdate) {
++  /// Drops this device's token, so a phone that has signed out stops getting
++  /// alarms meant for the previous parent.
++  Future<void> removeDeviceToken(String fcmToken) async {
++    try {
++      await _db.from('device_tokens').delete().eq('fcm_token', fcmToken);
++    } catch (_) {/* best effort */}
++  }
++
++  /// Realtime subscription to a bus's live position, over Supabase Realtime's
++  /// WebSocket. Calls [onUpdate] whenever the row changes, and
++  /// [onConnectionChange] as the socket joins or drops, so the UI can show a
++  /// live indicator and fall back to polling while it's down.
++  ///
++  /// The `bus_live_position` table must be in the `supabase_realtime`
++  /// publication or this subscribes successfully but never receives anything.
++  RealtimeChannel subscribeBusPosition(
++    String busId,
++    void Function(BusPosition) onUpdate, {
++    void Function(bool connected)? onConnectionChange,
++  }) {
+     final channel = _db.channel('bus_pos_$busId');
+     channel
+         .onPostgresChanges(
+@@ -190,9 +208,63 @@ class ParentService {
+             if (rec.isNotEmpty) onUpdate(BusPosition.fromMap(rec));
+           },
+         )
+-        .subscribe();
++        .subscribe((status, error) {
++      onConnectionChange?.call(status == RealtimeSubscribeStatus.subscribed);
++    });
+     return channel;
+   }
+ 
++  /// Signs in with a phone number instead of an email.
++  ///
++  /// Parents may hold either an email login or a phone-only login, so the
++  /// `parent-login` Edge Function resolves the number to the right account
++  /// server-side, checks the password, and hands back a session. Doing the
++  /// lookup in the app would reveal which numbers are registered.
++  Future<void> signInWithPhone({
++    required String phone,
++    required String password,
++  }) async {
++    String? refreshToken;
++    try {
++      final res = await _db.functions.invoke('parent-login', body: {
++        'phone': phone.trim(),
++        'password': password,
++      });
++      final data = res.data;
++      refreshToken = data is Map ? data['refresh_token'] as String? : null;
++    } on FunctionException catch (e) {
++      // A wrong password, an unknown number, or a deactivated account.
++      final details = e.details;
++      final message = details is Map ? details['error'] as String? : null;
++      throw AuthException(message ?? 'Phone number or password is incorrect.');
++    }
++
++    if (refreshToken == null) {
++      throw AuthException('Phone number or password is incorrect.');
++    }
++    await _db.auth.setSession(refreshToken);
++  }
++
++  /// Asks the school office to reset this parent's password.
++  ///
++  /// Runs as an anonymous user (the parent can't sign in), so it goes through
++  /// the `request_password_reset` database function, which rate-limits requests
++  /// and matches the identifier to an account server-side. It never reports
++  /// whether the account exists.
++  Future<void> requestPasswordReset({
++    required String identifier,
++    required String contactPhone,
++  }) async {
++    await _db.rpc('request_password_reset', params: {
++      'p_identifier': identifier.trim(),
++      'p_contact_phone': contactPhone.trim(),
++    });
++  }
++
++  /// Sets a new password for the signed-in parent.
++  Future<void> updatePassword(String newPassword) async {
++    await _db.auth.updateUser(UserAttributes(password: newPassword));
++  }
++
+   Future<void> signOut() => _db.auth.signOut();
+ }
+diff --git a/lib/services/push_service.dart b/lib/services/push_service.dart
+index 82d51c3..0fe8202 100644
+--- a/lib/services/push_service.dart
++++ b/lib/services/push_service.dart
+@@ -3,18 +3,34 @@ import 'dart:io' show Platform;
+ import 'package:firebase_core/firebase_core.dart';
+ import 'package:firebase_messaging/firebase_messaging.dart';
+ import 'package:flutter/foundation.dart';
++import '../firebase_options.dart';
+ import 'alarm_service.dart';
+ import 'parent_service.dart';
+ 
+-/// Background/terminated FCM handler. Must be top-level.
+-/// The OS shows the push on the high-importance 'proximity_alarm' channel
+-/// (created in AlarmService.init), so it rings even when the app is closed.
++/// Handles pushes that arrive while the app is in the background or closed.
++/// Must be a top-level function, and it runs in its own isolate, so Firebase
++/// has to be initialised again here.
+ @pragma('vm:entry-point')
+ Future<void> firebaseBackgroundHandler(RemoteMessage message) async {
+-  // Hook for future background logic.
++  try {
++    if (Firebase.apps.isEmpty) {
++      await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
++    }
++    // A push carrying a `notification` block is drawn by Android itself on the
++    // channel the backend names. Only a data-only push needs us to draw it.
++    final isAlarm = (message.data['type'] ?? '') == 'PROXIMITY_ALARM';
++    if (message.notification == null && isAlarm) {
++      await AlarmService().ringForeground(
++        title: message.data['title'] ?? 'Bus is approaching',
++        body: message.data['body'] ?? '',
++      );
++    }
++  } catch (e) {
++    debugPrint('Background push handling failed: $e');
++  }
+ }
+ 
+-/// Owns everything Firebase/FCM: init, token registration, foreground alarm.
++/// Owns everything Firebase/FCM: init, permission, token registration, alarm.
+ class PushService {
+   PushService._();
+   static final PushService instance = PushService._();
+@@ -24,23 +40,28 @@ class PushService {
+   StreamSubscription<RemoteMessage>? _msgSub;
+   StreamSubscription<String>? _tokenSub;
+ 
+-  /// Safe to call once at startup. If google-services.json isn't set up,
+-  /// the app still runs — only push/alarm is disabled.
++  /// Called once at startup.
+   Future<void> init() async {
+     if (_ready.isCompleted) return;
+     try {
+-      await Firebase.initializeApp();
++      // Options come from firebase_options.dart. Without them, Android falls
++      // back to google-services.json — and if that file is missing from the
++      // build, initialisation throws and push dies silently.
++      if (Firebase.apps.isEmpty) {
++        await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
++      }
+       FirebaseMessaging.onBackgroundMessage(firebaseBackgroundHandler);
+       await AlarmService().init();
+       _ready.complete(true);
++      debugPrint('[Push] Firebase ready.');
+     } catch (e) {
+-      debugPrint('Firebase not configured yet — push disabled: $e');
++      debugPrint('[Push] Firebase init FAILED — notifications are off: $e');
+       _ready.complete(false);
+     }
+   }
+ 
+-  /// Call after login. Registers the device token and the foreground alarm.
+-  /// Guarded so listeners are never registered twice.
++  /// Called after login: asks permission, saves the device token, and listens
++  /// for alarms while the app is open.
+   Future<void> attach(ParentService service) async {
+     if (_attached) return;
+     _attached = true;
+@@ -49,36 +70,63 @@ class PushService {
+ 
+     try {
+       final messaging = FirebaseMessaging.instance;
+-      await messaging.requestPermission(alert: true, badge: true, sound: true);
++
++      final settings = await messaging.requestPermission(
++        alert: true, badge: true, sound: true,
++      );
++      debugPrint('[Push] permission: ${settings.authorizationStatus}');
++      if (settings.authorizationStatus == AuthorizationStatus.denied) {
++        // Nothing can be delivered until the parent turns notifications on in
++        // Android settings, so don't pretend otherwise in the logs.
++        debugPrint('[Push] Notifications denied — alarms will not be shown.');
++      }
+ 
+       final platform = Platform.isIOS ? 'ios' : 'android';
++
++      // iOS won't hand out a token until APNs has registered the device.
++      if (Platform.isIOS) {
++        await messaging.getAPNSToken();
++      }
++
+       final token = await messaging.getToken();
+-      if (token != null) await service.registerDeviceToken(token, platform);
++      if (token != null) {
++        await service.registerDeviceToken(token, platform);
++        debugPrint('[Push] token saved (${token.substring(0, 12)}…)');
++      } else {
++        debugPrint('[Push] No FCM token returned.');
++      }
+ 
+-      _tokenSub = messaging.onTokenRefresh
+-          .listen((t) => service.registerDeviceToken(t, platform));
++      // Tokens rotate on reinstall, data clear, or restore. Without this the
++      // backend keeps pushing to a dead token and nothing ever arrives.
++      _tokenSub = messaging.onTokenRefresh.listen((t) async {
++        await service.registerDeviceToken(t, platform);
++        debugPrint('[Push] token refreshed.');
++      });
+ 
+-      // Foreground: the OS won't show the push while the app is open,
+-      // so ring the alarm ourselves.
++      // Foreground: Android suppresses FCM's own notification, so ring here.
+       _msgSub = FirebaseMessaging.onMessage.listen((m) {
+         if ((m.data['type'] ?? '') == 'PROXIMITY_ALARM') {
+           AlarmService().ringForeground(
+-            title: m.notification?.title ?? 'Evide School Bus',
+-            body: m.notification?.body ?? '',
++            title: m.notification?.title ?? m.data['title'] ?? 'Bus is approaching',
++            body: m.notification?.body ?? m.data['body'] ?? '',
+           );
+         }
+       });
+     } catch (e) {
+-      debugPrint('FCM wiring skipped: $e');
++      debugPrint('[Push] wiring failed: $e');
+     }
+   }
+ 
+-  /// Call on logout.
+-  void detach() {
+-    _msgSub?.cancel();
+-    _tokenSub?.cancel();
++  /// Removes this device's token so a signed-out phone stops receiving alarms.
++  Future<void> detach({ParentService? service}) async {
++    await _msgSub?.cancel();
++    await _tokenSub?.cancel();
+     _msgSub = null;
+     _tokenSub = null;
+     _attached = false;
++    try {
++      final token = await FirebaseMessaging.instance.getToken();
++      if (token != null && service != null) await service.removeDeviceToken(token);
++    } catch (_) {/* signing out shouldn't fail over this */}
+   }
+ }
