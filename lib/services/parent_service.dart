@@ -145,7 +145,7 @@ class ParentService {
   Future<List<AppNotification>> loadNotifications() async {
     final rows = await _db
         .from('notifications')
-        .select('id, title, body, category, created_at')
+        .select('id, title, body, category, sender_type, sender_name, student_id, created_at')
         .order('created_at', ascending: false)
         .limit(50);
     return (rows as List).map((m) => AppNotification.fromMap(m as Map<String, dynamic>)).toList();

@@ -79,19 +79,47 @@ class AppNotification {
   final String title;
   final String body;
   final String? category;
+  /// 'management', 'driver' or 'system' (attendance and trip events).
+  final String? senderType;
+  final String? senderName;
+  final String? studentId;
   final DateTime createdAt;
+
   AppNotification({
     required this.id,
     required this.title,
     required this.body,
     required this.category,
     required this.createdAt,
+    this.senderType,
+    this.senderName,
+    this.studentId,
   });
+
   factory AppNotification.fromMap(Map<String, dynamic> m) => AppNotification(
         id: m['id'] as String,
         title: m['title'] as String? ?? '',
         body: m['body'] as String? ?? '',
         category: m['category'] as String?,
+        senderType: m['sender_type'] as String?,
+        senderName: m['sender_name'] as String?,
+        studentId: m['student_id'] as String?,
         createdAt: DateTime.tryParse(m['created_at'] as String? ?? '') ?? DateTime.now(),
       );
+
+  bool get isAttendance => category == 'ATTENDANCE';
+  bool get isMessage => category == 'MESSAGE';
+
+  /// Who it came from, for the line under the message.
+  String get fromLabel {
+    if (senderName != null && senderName!.trim().isNotEmpty) return senderName!;
+    switch (senderType) {
+      case 'management':
+        return 'School office';
+      case 'driver':
+        return 'Bus staff';
+      default:
+        return 'Evide';
+    }
+  }
 }
