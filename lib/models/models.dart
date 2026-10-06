@@ -51,10 +51,13 @@ class Child {
   final double? pickupLng;
   final double? dropLat;
   final double? dropLng;
-  final BusInfo? bus;
+  BusInfo? bus; // mutable: updated live when the trip starts/ends
   final SchoolInfo school;
 
   BusPosition? livePosition;
+  /// Where this child is on today's trip (from student_trip_status):
+  /// waiting | reached | picked_up | absent | at_school | dropped. Null = no trip info.
+  String? tripStage;
   List<List<double>>? routeLine;   // school <-> stop, [ [lng,lat], ... ]
   List<List<double>>? busSegment;  // live bus -> stop, drawn on top when live
 
@@ -70,6 +73,7 @@ class Child {
     this.dropLng,
     this.bus,
     this.livePosition,
+    this.tripStage,
     this.routeLine,
   });
 }

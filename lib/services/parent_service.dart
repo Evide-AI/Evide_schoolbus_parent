@@ -98,6 +98,7 @@ class ParentService {
         dropLng: c.dropLng,
         bus: c.bus,
         livePosition: c.livePosition,
+        tripStage: c.tripStage,
         routeLine: c.routeLine,
       );
 
@@ -241,6 +242,91 @@ class ParentService {
         .subscribe((status, error) {
       onConnectionChange?.call(status == RealtimeSubscribeStatus.subscribed);
     });
+    return channel;
+  }
+
+  /// Realtime subscription to a bus's status (running / not_running), so the
+  /// label flips as soon as the trip starts or ends. Needs `buses` in the
+  /// `supabase_realtime` publication (migration_008).
+  RealtimeChannel subscribeBusStatus(
+    String busId,
+    void Function(String status) onUpdate,
+  ) {
+    final channel = _db.channel('bus_status_$busId');
+    channel
+        .onPostgresChanges(
+          event: PostgresChangeEvent.update,
+          schema: 'public',
+          table: 'buses',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'id',
+            value: busId,
+          ),
+          callback: (payload) {
+            final st = payload.newRecord['status'] as String?;
+            if (st != null) onUpdate(st);
+          },
+        )
+        .subscribe();
+    return channel;
+  }
+
+  /// One-time fetch of a bus's status (used by the polling fallback).
+  Future<String?> fetchBusStatus(String busId) async {
+    final row =
+        await _db.from('buses').select('status').eq('id', busId).maybeSingle();
+    return row?['status'] as String?;
+  }
+
+  // Today's date in India (the school's day), as yyyy-MM-dd.
+  String _todayIst() {
+    final d = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    return '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+  }
+
+  /// Where this child is on today's trip (latest row for today), or null.
+  Future<String?> fetchTripStage(String studentId) async {
+    try {
+      final row = await _db
+          .from('student_trip_status')
+          .select('stage')
+          .eq('student_id', studentId)
+          .eq('service_date', _todayIst())
+          .order('updated_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
+      return row?['stage'] as String?;
+    } catch (_) {
+      return null; // table not created yet: no yellow line, nothing breaks
+    }
+  }
+
+  /// Live changes to this child's trip stage. Needs student_trip_status in the
+  /// `supabase_realtime` publication (migration_009).
+  RealtimeChannel subscribeTripStage(
+    String studentId,
+    void Function(String stage) onUpdate,
+  ) {
+    final channel = _db.channel('trip_stage_$studentId');
+    channel
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'student_trip_status',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'student_id',
+            value: studentId,
+          ),
+          callback: (payload) {
+            final st = payload.newRecord['stage'] as String?;
+            if (st != null) onUpdate(st);
+          },
+        )
+        .subscribe();
     return channel;
   }
 

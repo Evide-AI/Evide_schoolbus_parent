@@ -10,6 +10,7 @@ import '../config.dart';
 import '../models/models.dart';
 import '../services/parent_service.dart';
 import '../theme.dart';
+import '../utils/route_geometry.dart';
 import '../utils/route_trail.dart';
 import 'change_password_screen.dart';
 import 'notifications_screen.dart';
@@ -27,14 +28,25 @@ const double _minMoveForHeading = 5; // metres
 // Older than this, the bus is treated as offline.
 const Duration _staleAfter = Duration(minutes: 5);
 
-// --- Bus trail (yellow line) ---
-// The trail is the path the bus has actually driven, recorded from live
-// positions while the app is open. Only the parts of it that sit on this
-// child's blue route are drawn, so a bus doing other stops or heading to the
-// depot leaves no yellow line on the parent's map.
-const double _trailToleranceM = 60; // how far off the blue line still counts
-const double _minTrailMove = 8; // metres before a new trail point is kept
-const int _maxTrailPoints = 800; // keeps memory and drawing cost bounded
+// --- Yellow line: where the bus is heading next for this child ---
+// The trip stage (from the backend) decides the target:
+//   waiting / reached  -> bus to the child's stop
+//   picked_up          -> bus to the school
+//   anything else (absent, at_school, dropped) -> no yellow line
+// While the bus is on the blue route the yellow line is cut out of the blue
+// route itself (same coordinates, so it can never be misaligned). When the bus
+// is elsewhere (coming from the depot, another road) it follows the road from
+// the bus to the target instead.
+// The blue line (school <-> stop) is always drawn.
+const double _trailToleranceM = 60; // farther than this from blue = off the blue route
+
+// --- Camera ---
+// Zoom used when centring on the bus (first view, switching child, recenter).
+const double _busZoom = 15;
+// The camera only moves on first load, when switching child, when the bus
+// first appears, and while "following" the bus. Refresh / GPS pings / app
+// resume never reset the user's zoom. Following stops as soon as the user
+// touches the map, and the "Bus" button turns it back on.
 
 // Optional custom marker images. Drop your own PNGs at these paths (square,
 // ~512x512, transparent background, subject centred — the point of a pin
@@ -82,8 +94,24 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   final Map<String, bool> _busFacingRight = {};
   final Map<String, ({double lat, double lng})> _lastBusPoint = {};
 
-  // Where each bus has driven, keyed by bus id.
-  final Map<String, List<GeoPoint>> _trails = {};
+  // One slicer per route, keyed by the routeLine list itself, so it rebuilds
+  // automatically whenever the route is recomputed.
+  final Expando<RouteSlicer> _slicers = Expando<RouteSlicer>();
+
+  // Road path bus -> target, used when the bus is not on the blue route.
+  // Cached per child and only re-requested when the bus has moved or the
+  // target changed, so we don't call Mapbox Directions on every GPS ping.
+  final Map<String, _RoadYellow> _yellowRoad = {};
+  bool _yellowBusy = false;
+
+  // Camera state.
+  // _framedChildId: child the camera was last framed for (null = needs framing).
+  // _framedOnBus: whether that framing was centred on the bus (false when the
+  //   bus had no position yet, so we re-centre once it appears).
+  // _followBus: camera follows the bus until the user touches the map.
+  String? _framedChildId;
+  bool _framedOnBus = false;
+  bool _followBus = true;
 
   @override
   void initState() {
@@ -122,11 +150,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       for (final child in _children) {
         final bus = child.bus;
         if (bus == null) continue;
+        final stage = await _service.fetchTripStage(child.id);
+        if (stage != null) child.tripStage = stage;
+        final st = await _service.fetchBusStatus(bus.id);
+        if (st != null && st != bus.status) {
+          child.bus = BusInfo(id: bus.id, busNumber: bus.busNumber, status: st);
+        }
         final pos = await _service.fetchBusPosition(bus.id);
         if (pos == null) continue;
         child.livePosition = pos;
         _updateFacing(bus.id.toString(), pos.lat, pos.lng, pos.heading, pos.speedKmh);
-        _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
       }
       if (mounted) {
         setState(() => _lastRefreshed = DateTime.now());
@@ -137,7 +170,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   /// Loads everything: children, their routes, and live bus positions.
   /// [silent] keeps the map on screen (used by the refresh button) instead of
-  /// replacing it with a full-screen spinner.
+  /// replacing it with a full-screen spinner. Neither mode touches the camera
+  /// once it has been framed.
   Future<void> _load({bool silent = false}) async {
     setState(() {
       if (silent) {
@@ -181,7 +215,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
         if (pos != null) {
           _updateFacing(bus.id.toString(), pos.lat, pos.lng, pos.heading,
               pos.speedKmh);
-          _recordTrailPoint(bus.id.toString(), pos.lat, pos.lng);
         }
 
         final channel = _service.subscribeBusPosition(
@@ -190,7 +223,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
             child.livePosition = newPos;
             _updateFacing(bus.id.toString(), newPos.lat, newPos.lng,
                 newPos.heading, newPos.speedKmh);
-            _recordTrailPoint(bus.id.toString(), newPos.lat, newPos.lng);
             if (mounted) setState(() => _lastRefreshed = DateTime.now());
             _redraw();
           },
@@ -200,6 +232,22 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           },
         );
         _channels.add(channel);
+
+        _channels.add(_service.subscribeBusStatus(bus.id, (status) {
+          child.bus = BusInfo(
+              id: bus.id, busNumber: bus.busNumber, status: status);
+          if (mounted) setState(() {});
+          _redraw();
+        }));
+
+        // Where this child is on today's trip (waiting / reached / picked_up
+        // / absent / at_school / dropped). Decides what the yellow line shows.
+        child.tripStage = await _service.fetchTripStage(child.id);
+        _channels.add(_service.subscribeTripStage(child.id, (stage) {
+          child.tripStage = stage;
+          if (mounted) setState(() {});
+          _redraw();
+        }));
       }
 
       setState(() {
@@ -230,19 +278,6 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     await _load(silent: true);
   }
 
-  // Adds a point to this bus's trail, skipping GPS noise while parked.
-  void _recordTrailPoint(String busId, double lat, double lng) {
-    final trail = _trails.putIfAbsent(busId, () => <GeoPoint>[]);
-    if (trail.isNotEmpty) {
-      final last = trail.last;
-      if (_distanceM(last.lat, last.lng, lat, lng) < _minTrailMove) return;
-    }
-    trail.add(GeoPoint(lat, lng));
-    if (trail.length > _maxTrailPoints) {
-      trail.removeRange(0, trail.length - _maxTrailPoints);
-    }
-  }
-
   // This child's blue route as plain points, or null when there's no route.
   List<GeoPoint>? _routePoints(Child child) {
     final line = child.routeLine;
@@ -259,6 +294,112 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     if (pos == null || route == null) return null;
     return isOnRoute(GeoPoint(pos.lat, pos.lng), route,
         toleranceMetres: _trailToleranceM);
+  }
+
+  // What the yellow line should lead to, or null when there should be none:
+  //   'stop'   the bus is still coming to this child's stop
+  //   'school' the child is on board and the bus is heading to school
+  // No yellow when the trip isn't running, the bus has no signal, the child
+  // was marked absent, the bus is at school, or the child has been dropped.
+  String? _yellowTargetKind(Child child) {
+    final bus = child.bus;
+    final pos = child.livePosition;
+    if (bus == null || pos == null || bus.status != 'running') return null;
+
+    // Stale GPS: don't draw a yellow line to a position that may be wrong.
+    final t = pos.recordedAt;
+    if (t != null && DateTime.now().difference(t) > _staleAfter) return null;
+
+    switch (child.tripStage) {
+      case 'waiting':
+      case 'reached':
+        return 'stop';
+      case 'picked_up':
+        return 'school';
+      default: // absent, at_school, dropped, or no trip info yet
+        return null;
+    }
+  }
+
+  // The yellow line for this child, as points from the bus to its target.
+  Future<List<LL>?> _yellowFor(Child child) async {
+    final kind = _yellowTargetKind(child);
+    final pos = child.livePosition;
+    if (kind == null || pos == null) {
+      _yellowRoad.remove(child.id);
+      return null;
+    }
+
+    final stopLat = child.pickupLat ?? child.dropLat;
+    final stopLng = child.pickupLng ?? child.dropLng;
+    final targetLat = kind == 'stop' ? stopLat : child.school.lat;
+    final targetLng = kind == 'stop' ? stopLng : child.school.lng;
+    if (targetLat == null || targetLng == null) return null;
+
+    // 1. Bus is on the blue route: cut the yellow line out of it.
+    final line = child.routeLine;
+    if (line != null && line.length >= 2 && stopLat != null && stopLng != null) {
+      // routeLine holds [lng, lat] pairs, and runs school -> stop.
+      final slicer = _slicers[line] ??= RouteSlicer(
+        line.map((c) => LL(c[1].toDouble(), c[0].toDouble())).toList(),
+      );
+      final bus = slicer.snap(LL(pos.lat, pos.lng));
+      if (bus.off <= _trailToleranceM) {
+        if (kind == 'stop') {
+          final stop = slicer.snap(LL(stopLat, stopLng));
+          if (bus.along >= stop.along - 5) return null; // at the stop
+          return slicer.slice(bus, stop);
+        } else {
+          if (bus.along <= 5) return null; // at the school
+          return slicer.head(bus).reversed.toList(); // bus -> school
+        }
+      }
+    }
+
+    // 2. Bus is somewhere else: follow the road from the bus to the target.
+    return _roadYellow(child, kind, pos, targetLat, targetLng);
+  }
+
+  // Road path bus -> target via Mapbox Directions (straight line if that
+  // fails). Refreshed when the bus has moved ~100 m, the target changed, or
+  // 30 s passed.
+  Future<List<LL>?> _roadYellow(
+    Child child,
+    String kind,
+    BusPosition pos,
+    double toLat,
+    double toLng,
+  ) async {
+    final key = '$kind:$toLat,$toLng';
+    final cached = _yellowRoad[child.id];
+    final fresh = cached != null &&
+        cached.key == key &&
+        DateTime.now().difference(cached.at).inSeconds < 30 &&
+        _distanceM(cached.fromLat, cached.fromLng, pos.lat, pos.lng) < 100;
+    if (fresh) return cached!.line;
+    if (_yellowBusy) return (cached != null && cached.key == key) ? cached.line : null;
+
+    _yellowBusy = true;
+    try {
+      final road = await _service.fetchRoadRoute(
+        fromLat: pos.lat,
+        fromLng: pos.lng,
+        toLat: toLat,
+        toLng: toLng,
+      );
+      final points = road != null
+          ? road.map((c) => LL(c[1], c[0])).toList() // [lng, lat] -> LL
+          : [LL(pos.lat, pos.lng), LL(toLat, toLng)];
+      _yellowRoad[child.id] = _RoadYellow(
+        key: key,
+        line: points,
+        fromLat: pos.lat,
+        fromLng: pos.lng,
+      );
+      return points;
+    } finally {
+      _yellowBusy = false;
+    }
   }
 
   // Decides whether the bus should face left or right. Only changes when the
@@ -341,8 +482,10 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
 
   Future<void> _onMapCreated(MapboxMap map) async {
     _map = map;
-    _pointManager = await map.annotations.createPointAnnotationManager();
+    // Create the line layer FIRST: layers created later draw on top, so the
+    // bus / school / stop markers sit above both the blue and yellow lines.
     _lineManager = await map.annotations.createPolylineAnnotationManager();
+    _pointManager = await map.annotations.createPointAnnotationManager();
 
     // Keep every marker upright on screen, even when the map is tilted or
     // rotated. This is what stops the bus from "lying down" on the road.
@@ -379,13 +522,18 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     final map = _map;
     if (map == null || _pointManager == null || _lineManager == null) return;
 
+    final child = _selected;
+
+    // Work out the yellow line first: it may need a network call (Mapbox
+    // Directions), and clearing the map before that would make it flicker.
+    final yellow = child != null ? await _yellowFor(child) : null;
+
     await _pointManager!.deleteAll();
     await _lineManager!.deleteAll();
 
-    final child = _selected;
     if (child == null) return;
 
-    // --- Blue route: school <-> this child's stop ---
+    // --- Blue route: school <-> this child's stop (always shown) ---
     final route = _routePoints(child);
     if (route != null) {
       await _lineManager!.create(PolylineAnnotationOptions(
@@ -397,26 +545,16 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       ));
     }
 
-    // --- Yellow trail: only where the bus drove along the blue route ---
-    // Off-route driving (other stops, the depot, parallel roads) is dropped,
-    // so nothing yellow is drawn while the bus is away from this route.
-    final busId = child.bus?.id.toString();
-    final trail = busId != null ? _trails[busId] : null;
-    if (route != null && trail != null && trail.length > 1) {
-      final pieces = clipTrailToRoute(
-        trail: trail,
-        route: route,
-        toleranceMetres: _trailToleranceM,
-      );
-      for (final piece in pieces) {
-        await _lineManager!.create(PolylineAnnotationOptions(
-          geometry: LineString(
-            coordinates: piece.map((p) => Position(p.lng, p.lat)).toList(),
-          ),
-          lineColor: AppColors.amber.value,
-          lineWidth: 6.0,
-        ));
-      }
+    // --- Yellow: bus -> where it is heading next for this child ---
+    // Drawn after the blue line so it sits on top.
+    if (yellow != null && yellow.length > 1) {
+      await _lineManager!.create(PolylineAnnotationOptions(
+        geometry: LineString(
+          coordinates: yellow.map((p) => Position(p.lng, p.lat)).toList(),
+        ),
+        lineColor: AppColors.amber.value,
+        lineWidth: 6.0,
+      ));
     }
 
     // --- Markers (big custom icons) ---
@@ -464,7 +602,56 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     // Keeps the bottom sheet's on-route line in step with the map.
     if (mounted) setState(() {});
 
-    await _fitCamera(child);
+    await _updateCamera(child);
+  }
+
+  /// Camera rules (see the notes at the top of the file). This is the only
+  /// place _redraw touches the camera, and it never resets the user's zoom.
+  Future<void> _updateCamera(Child child) async {
+    final hasBus = child.livePosition != null;
+
+    // First time for this child (first load or after switching child), or the
+    // first time the bus shows up after we had to frame without it.
+    if (_framedChildId != child.id || (!_framedOnBus && hasBus)) {
+      _framedChildId = child.id;
+      _framedOnBus = hasBus;
+      await _focusBus(child);
+      return;
+    }
+
+    // Otherwise only glide along with the bus, and only while following.
+    if (_followBus && hasBus) {
+      final pos = child.livePosition!;
+      await _map?.easeTo(
+        CameraOptions(center: Point(coordinates: Position(pos.lng, pos.lat))),
+        MapAnimationOptions(duration: 600),
+      );
+    }
+  }
+
+  /// Centres on the bus at [_busZoom]. With no bus position yet, fits the
+  /// school and stop instead.
+  Future<void> _focusBus(Child child) async {
+    final pos = child.livePosition;
+    if (pos == null) {
+      await _fitCamera(child);
+      return;
+    }
+    await _map?.flyTo(
+      CameraOptions(
+        center: Point(coordinates: Position(pos.lng, pos.lat)),
+        zoom: _busZoom,
+        pitch: 45,
+      ),
+      MapAnimationOptions(duration: 800),
+    );
+  }
+
+  void _recenterOnBus() {
+    final child = _selected;
+    if (child == null) return;
+    setState(() => _followBus = true);
+    _focusBus(child);
   }
 
   /// Uses the custom PNG at [assetPath] when it exists, otherwise falls back
@@ -560,6 +747,8 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
     return bytes!.buffer.asUint8List();
   }
 
+  // Fallback framing used only when the bus has no position yet: fits school
+  // and stop. Never called on refresh or GPS pings.
   Future<void> _fitCamera(Child child) async {
     final map = _map;
     if (map == null) return;
@@ -598,9 +787,9 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
           ? (maxLat - minLat).abs()
           : (maxLng - minLng).abs();
       if (span > 0.2) {
-        zoom = 11;
-      } else if (span > 0.1) {
         zoom = 9.5;
+      } else if (span > 0.1) {
+        zoom = 10.5;
       } else if (span > 0.05) {
         zoom = 11.5;
       } else if (span > 0.02) {
@@ -608,7 +797,7 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       } else if (span > 0.01) {
         zoom = 13.5;
       } else {
-        zoom = 17.5;
+        zoom = 15;
       }
     }
 
@@ -623,7 +812,13 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
   }
 
   void _selectChild(int i) {
-    setState(() => _selectedIndex = i);
+    setState(() {
+      _selectedIndex = i;
+      _followBus = true;
+    });
+    // Forces the camera to be framed again for the newly selected child.
+    _framedChildId = null;
+    _framedOnBus = false;
     _redraw();
   }
 
@@ -642,17 +837,26 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                     onSignOut: () => _service.signOut())
                 : Stack(
                     children: [
-                      // Map fills the screen
+                      // Map fills the screen. The Listener notices the user
+                      // dragging / pinching so we stop following the bus.
                       Positioned.fill(
-                        child: MapWidget(
-                          key: const ValueKey('parentMap'),
-                          styleUri: MapboxStyles.MAPBOX_STREETS,
-                          cameraOptions: CameraOptions(
-                            center: Point(coordinates: Position(76.04, 10.965)),
-                            zoom: 12,
-                            pitch: 45,
+                        child: Listener(
+                          onPointerMove: (e) {
+                            if (_followBus && e.delta.distance > 2) {
+                              setState(() => _followBus = false);
+                            }
+                          },
+                          child: MapWidget(
+                            key: const ValueKey('parentMap'),
+                            styleUri: MapboxStyles.MAPBOX_STREETS,
+                            cameraOptions: CameraOptions(
+                              center:
+                                  Point(coordinates: Position(76.04, 10.965)),
+                              zoom: 12,
+                              pitch: 45,
+                            ),
+                            onMapCreated: _onMapCreated,
                           ),
-                          onMapCreated: _onMapCreated,
                         ),
                       ),
 
@@ -682,14 +886,37 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
                         ),
                       ),
 
-                      // Bottom sheet with the selected child's bus details
+                      // Bottom sheet with the selected child's bus details,
+                      // plus the "Bus" recenter button while not following.
                       if (selected != null)
                         Align(
                           alignment: Alignment.bottomCenter,
-                          child: _BusDetailsSheet(
-                            child: selected,
-                            onRoute: _isBusOnRoute(selected),
-                            liveConnected: _liveConnected,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              if (!_followBus && selected.livePosition != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(right: 10),
+                                  child: FloatingActionButton.extended(
+                                    heroTag: 'recenterBus',
+                                    onPressed: _recenterOnBus,
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: AppColors.accent,
+                                    icon: const Icon(
+                                        Icons.my_location_rounded,
+                                        size: 20),
+                                    label: const Text('Bus',
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.w700)),
+                                  ),
+                                ),
+                              _BusDetailsSheet(
+                                child: selected,
+                                onRoute: _isBusOnRoute(selected),
+                                liveConnected: _liveConnected,
+                              ),
+                            ],
                           ),
                         ),
                     ],
@@ -697,6 +924,21 @@ class _MapScreenState extends State<MapScreen> with WidgetsBindingObserver {
       ),
     );
   }
+}
+
+/// A cached road path from the bus to the yellow line's target.
+class _RoadYellow {
+  final String key; // target kind + coordinates it was computed for
+  final List<LL> line;
+  final double fromLat;
+  final double fromLng;
+  final DateTime at = DateTime.now();
+  _RoadYellow({
+    required this.key,
+    required this.line,
+    required this.fromLat,
+    required this.fromLng,
+  });
 }
 
 class _ChildrenBar extends StatelessWidget {
@@ -902,10 +1144,9 @@ class _BusDetailsSheet extends StatelessWidget {
           'maintenance': AppColors.amber,
         }[bus?.status] ??
         AppColors.inkFaint;
-    if (bus?.status == 'running' && isStale) {
-      statusLabel = 'Offline';
-      statusColor = AppColors.inkFaint;
-    }
+    // The badge follows the trip: Running while the trip is in progress,
+    // Not running otherwise. A missing GPS signal is explained in the text
+    // below ("Bus is not sending its location"), not by changing the badge.
 
     final String speedText;
     if (pos == null) {
@@ -920,7 +1161,7 @@ class _BusDetailsSheet extends StatelessWidget {
       speedText = 'Live location active';
     }
 
-    // Explains an empty yellow trail, so parents don't think tracking is broken.
+    // Explains a missing yellow line, so parents don't think tracking is broken.
     final bool showOffRouteNote = onRoute == false && !isStale && pos != null;
 
     return Container(

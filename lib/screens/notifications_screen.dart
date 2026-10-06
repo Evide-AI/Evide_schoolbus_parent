@@ -209,6 +209,15 @@ class _NotificationCard extends StatelessWidget {
         background: AppColors.goSoft,
       );
     }
+    if (category == 'STUDENT_ABSENT') {
+      return (icon: Icons.person_off_rounded, color: AppColors.stop, background: AppColors.stopSoft);
+    }
+    if (category == 'REACHED_STOP') {
+      return (icon: Icons.location_on_rounded, color: AppColors.amber, background: AppColors.amberSoft);
+    }
+    if (category == 'REACHED_SCHOOL') {
+      return (icon: Icons.school_rounded, color: AppColors.go, background: AppColors.goSoft);
+    }
     if (category.startsWith('PROXIMITY')) {
       return (icon: Icons.near_me_rounded, color: AppColors.amber, background: AppColors.amberSoft);
     }
