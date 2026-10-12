@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Tint for the notification icon (Evide blue) -->
+    <color name="notification_color">#0D6DED</color>
+</resources>

@@ -21,6 +21,7 @@ dependencies:
 dev_dependencies:
   flutter_lints: ^4.0.0
   flutter_native_splash: ^2.4.1
+  flutter_launcher_icons: ^0.14.1
 
 # Native splash screen (logo on white). After `flutter pub get`, generate the
 # native assets once with:  dart run flutter_native_splash:create
@@ -30,6 +31,17 @@ flutter_native_splash:
   android_12:
     color: "#FFFFFF"
     image: assets/splash/android12_splash.png
+
+# App icon. The generated icons are already committed; only re-run this if
+# the artwork changes:  dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/icon/app_icon_square.png
+  remove_alpha_ios: true
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: assets/icon/app_icon_foreground.png
+  adaptive_icon_monochrome: assets/icon/app_icon_foreground.png
 
 flutter:
   uses-material-design: true
