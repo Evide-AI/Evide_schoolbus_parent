@@ -30,7 +30,7 @@ class AlarmService {
   Future<void> init() async {
     if (_initialized) return;
 
-    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const androidInit = AndroidInitializationSettings('@drawable/ic_notification');
     const iosInit = DarwinInitializationSettings(
       requestAlertPermission: true,
       requestBadgePermission: true,
