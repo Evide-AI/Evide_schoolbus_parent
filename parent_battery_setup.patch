@@ -1,0 +1,506 @@
+diff --git a/android/app/src/main/kotlin/in/evide/parent/MainActivity.kt b/android/app/src/main/kotlin/in/evide/parent/MainActivity.kt
+index 5013630..be36725 100644
+--- a/android/app/src/main/kotlin/in/evide/parent/MainActivity.kt
++++ b/android/app/src/main/kotlin/in/evide/parent/MainActivity.kt
+@@ -1,5 +1,116 @@
+ package `in`.evide.parent
+ 
++import android.content.ComponentName
++import android.content.Context
++import android.content.Intent
++import android.net.Uri
++import android.os.Build
++import android.os.PowerManager
++import android.provider.Settings
+ import io.flutter.embedding.android.FlutterActivity
++import io.flutter.embedding.engine.FlutterEngine
++import io.flutter.plugin.common.MethodChannel
+ 
+-class MainActivity : FlutterActivity()
++class MainActivity : FlutterActivity() {
++
++    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
++        super.configureFlutterEngine(flutterEngine)
++        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "in.evide.parent/battery")
++            .setMethodCallHandler { call, result ->
++                when (call.method) {
++                    "isIgnoringBatteryOptimizations" -> result.success(isIgnoringBatteryOptimizations())
++                    "openBatteryOptimizationSettings" -> result.success(openBatteryOptimizationSettings())
++                    "openAutostartSettings" -> result.success(openAutostartSettings())
++                    "openAlarmChannelSettings" -> result.success(openAlarmChannelSettings())
++                    "manufacturer" -> result.success(Build.MANUFACTURER.lowercase())
++                    else -> result.notImplemented()
++                }
++            }
++    }
++
++    private fun isIgnoringBatteryOptimizations(): Boolean {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
++        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
++        return pm.isIgnoringBatteryOptimizations(packageName)
++    }
++
++    /**
++     * Opens the system "Battery optimization" list (no special permission or
++     * Play policy declaration needed). Falls back to this app's details page.
++     */
++    private fun openBatteryOptimizationSettings(): Boolean {
++        return try {
++            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
++            true
++        } catch (e: Exception) {
++            openAppDetails()
++        }
++    }
++
++    /**
++     * Tries the manufacturer's own "autostart / background activity" screen.
++     * These component names are undocumented and vary by OS version, so every
++     * attempt is wrapped; the last resort is the app's details page.
++     */
++    private fun openAutostartSettings(): Boolean {
++        val candidates = listOf(
++            // Xiaomi / Redmi / Poco
++            "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
++            // Oppo / Realme (ColorOS)
++            "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
++            "com.coloros.safecenter" to "com.coloros.safecenter.startupapp.StartupAppListActivity",
++            "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity",
++            // Vivo / iQOO
++            "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
++            "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity",
++            // OnePlus
++            "com.oneplus.security" to "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity",
++            // Huawei / Honor
++            "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
++            // Samsung
++            "com.samsung.android.lool" to "com.samsung.android.sm.battery.ui.BatteryActivity",
++        )
++        for ((pkg, cls) in candidates) {
++            try {
++                val intent = Intent().apply {
++                    component = ComponentName(pkg, cls)
++                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++                }
++                startActivity(intent)
++                return true
++            } catch (_: Exception) {
++                // Not on this phone — try the next one.
++            }
++        }
++        return openAppDetails()
++    }
++
++    /** Opens the settings page for the "Bus approaching alerts" channel. */
++    private fun openAlarmChannelSettings(): Boolean {
++        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return openAppDetails()
++        return try {
++            startActivity(
++                Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
++                    putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
++                    putExtra(Settings.EXTRA_CHANNEL_ID, "proximity_alarm_v2")
++                }
++            )
++            true
++        } catch (e: Exception) {
++            openAppDetails()
++        }
++    }
++
++    private fun openAppDetails(): Boolean {
++        return try {
++            startActivity(
++                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
++                    data = Uri.parse("package:$packageName")
++                }
++            )
++            true
++        } catch (e: Exception) {
++            false
++        }
++    }
++}
+diff --git a/lib/screens/battery_setup_screen.dart b/lib/screens/battery_setup_screen.dart
+new file mode 100644
+index 0000000..7dde656
+--- /dev/null
++++ b/lib/screens/battery_setup_screen.dart
+@@ -0,0 +1,166 @@
++import 'package:flutter/material.dart';
++import '../services/battery_service.dart';
++import '../theme.dart';
++
++/// Walks the parent through the phone settings that let the "bus is near"
++/// alarm ring even when the app hasn't been opened for days.
++class BatterySetupScreen extends StatefulWidget {
++  /// Called when the parent finishes or skips.
++  final VoidCallback onDone;
++  const BatterySetupScreen({super.key, required this.onDone});
++
++  @override
++  State<BatterySetupScreen> createState() => _BatterySetupScreenState();
++}
++
++class _BatterySetupScreenState extends State<BatterySetupScreen> with WidgetsBindingObserver {
++  AlarmReadiness? _r;
++
++  @override
++  void initState() {
++    super.initState();
++    WidgetsBinding.instance.addObserver(this);
++    _refresh();
++  }
++
++  @override
++  void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
++    super.dispose();
++  }
++
++  /// The parent leaves for system settings and comes back — re-check then.
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    if (state == AppLifecycleState.resumed) _refresh();
++  }
++
++  Future<void> _refresh() async {
++    final r = await BatteryService.instance.check();
++    if (!mounted) return;
++    setState(() => _r = r);
++  }
++
++  Future<void> _skip() async {
++    await BatteryService.instance.markSkipped();
++    widget.onDone();
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final r = _r;
++    return Scaffold(
++      appBar: AppBar(title: const Text('Keep bus alarms working')),
++      body: r == null
++          ? const Center(child: CircularProgressIndicator())
++          : ListView(
++              padding: const EdgeInsets.all(20),
++              children: [
++                const Text(
++                  'Some phones switch off apps you haven\'t opened for a day or two. '
++                  'When that happens the bus alarm can\'t reach you. '
++                  'Turn on the settings below once and alarms will ring even if '
++                  'you don\'t open the app.',
++                  style: TextStyle(color: AppColors.inkSoft, height: 1.45),
++                ),
++                const SizedBox(height: 20),
++                _Step(
++                  done: r.notificationsOn,
++                  title: 'Allow notifications',
++                  body: 'Without this, nothing can be shown.',
++                  action: 'Allow',
++                  onTap: () async {
++                    await BatteryService.instance.openNotificationSettings();
++                    _refresh();
++                  },
++                ),
++                _Step(
++                  done: r.alarmChannelOn,
++                  title: 'Keep "Bus approaching alerts" loud',
++                  body: 'Set it to make sound and pop on screen, not "Silent".',
++                  action: 'Open alert settings',
++                  onTap: BatteryService.instance.openAlarmChannelSettings,
++                ),
++                _Step(
++                  done: r.batteryUnrestricted,
++                  title: 'Remove battery restriction',
++                  body: 'Find "Evide Parent" in the list and choose "Don\'t optimise" '
++                      '(or "Unrestricted" / "No restrictions").',
++                  action: 'Open battery settings',
++                  onTap: BatteryService.instance.openBatterySettings,
++                ),
++                if (r.needsAutostartStep)
++                  _Step(
++                    done: false,
++                    title: 'Allow Autostart / background running',
++                    body: 'Your phone (${_pretty(r.manufacturer)}) has its own app manager. '
++                        'Turn on Autostart for Evide Parent, and set battery to '
++                        '"No restrictions" if you see it.',
++                    action: 'Open autostart settings',
++                    onTap: BatteryService.instance.openAutostartSettings,
++                    cannotVerify: true,
++                  ),
++                const SizedBox(height: 24),
++                FilledButton(
++                  onPressed: widget.onDone,
++                  child: Text(r.allGood ? 'Done' : 'I\'ve done these'),
++                ),
++                TextButton(onPressed: _skip, child: const Text('Skip for now')),
++              ],
++            ),
++    );
++  }
++
++  String _pretty(String m) => m.isEmpty ? 'phone' : m[0].toUpperCase() + m.substring(1);
++}
++
++class _Step extends StatelessWidget {
++  final bool done;
++  final bool cannotVerify;
++  final String title;
++  final String body;
++  final String action;
++  final VoidCallback onTap;
++
++  const _Step({
++    required this.done,
++    required this.title,
++    required this.body,
++    required this.action,
++    required this.onTap,
++    this.cannotVerify = false,
++  });
++
++  @override
++  Widget build(BuildContext context) {
++    return Container(
++      margin: const EdgeInsets.only(bottom: 12),
++      padding: const EdgeInsets.all(14),
++      decoration: BoxDecoration(
++        color: done ? AppColors.goSoft : AppColors.surface,
++        borderRadius: BorderRadius.circular(12),
++        border: Border.all(color: done ? AppColors.go : AppColors.line),
++      ),
++      child: Column(
++        crossAxisAlignment: CrossAxisAlignment.start,
++        children: [
++          Row(children: [
++            Icon(done ? Icons.check_circle : Icons.error_outline,
++                color: done ? AppColors.go : AppColors.amber),
++            const SizedBox(width: 8),
++            Expanded(
++              child: Text(title,
++                  style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.ink)),
++            ),
++          ]),
++          const SizedBox(height: 6),
++          Text(body, style: const TextStyle(color: AppColors.inkSoft, height: 1.4)),
++          if (!done) ...[
++            const SizedBox(height: 10),
++            OutlinedButton(onPressed: onTap, child: Text(action)),
++          ],
++        ],
++      ),
++    );
++  }
++}
+diff --git a/lib/services/auth_gate.dart b/lib/services/auth_gate.dart
+index 1b61c07..446342e 100644
+--- a/lib/services/auth_gate.dart
++++ b/lib/services/auth_gate.dart
+@@ -1,7 +1,9 @@
+ import 'dart:async';
++import 'package:evide_school_parent/screens/battery_setup_screen.dart';
+ import 'package:evide_school_parent/screens/login_screen.dart';
+ import 'package:evide_school_parent/screens/map_screen.dart';
+ import 'package:evide_school_parent/screens/splash_screen.dart';
++import 'package:evide_school_parent/services/battery_service.dart';
+ import 'package:evide_school_parent/services/parent_service.dart';
+ import 'package:evide_school_parent/services/push_service.dart';
+ import 'package:flutter/material.dart';
+@@ -23,6 +25,7 @@ class _AuthGateState extends State<AuthGate> {
+ 
+   Session? _session = Supabase.instance.client.auth.currentSession;
+   bool _splashDone = false;
++  bool _showBatterySetup = false;
+ 
+   @override
+   void initState() {
+@@ -33,12 +36,16 @@ class _AuthGateState extends State<AuthGate> {
+       if (mounted) setState(() => _splashDone = true);
+     });
+ 
+-    if (_session != null) PushService.instance.attach(_service);
++    if (_session != null) {
++      PushService.instance.attach(_service);
++      _checkBatterySetup();
++    }
+ 
+     _authSub = Supabase.instance.client.auth.onAuthStateChange.listen((state) {
+       final session = state.session;
+       if (session != null) {
+         PushService.instance.attach(_service);
++        _checkBatterySetup();
+       } else {
+         PushService.instance.detach(service: _service);
+       }
+@@ -46,6 +53,14 @@ class _AuthGateState extends State<AuthGate> {
+     });
+   }
+ 
++  /// On Android, asks the parent to fix any setting that would stop alarms
++  /// reaching a closed app. Re-prompts at most every 3 days after a skip.
++  Future<void> _checkBatterySetup() async {
++    if (await BatteryService.instance.shouldPrompt() && mounted) {
++      setState(() => _showBatterySetup = true);
++    }
++  }
++
+   @override
+   void dispose() {
+     _authSub?.cancel();
+@@ -55,6 +70,10 @@ class _AuthGateState extends State<AuthGate> {
+   @override
+   Widget build(BuildContext context) {
+     if (!_splashDone) return const SplashScreen();
+-    return _session != null ? const MapScreen() : const LoginScreen();
++    if (_session == null) return const LoginScreen();
++    if (_showBatterySetup) {
++      return BatterySetupScreen(onDone: () => setState(() => _showBatterySetup = false));
++    }
++    return const MapScreen();
+   }
+ }
+diff --git a/lib/services/battery_service.dart b/lib/services/battery_service.dart
+new file mode 100644
+index 0000000..8a61565
+--- /dev/null
++++ b/lib/services/battery_service.dart
+@@ -0,0 +1,127 @@
++import 'dart:io' show Platform;
++import 'package:flutter/foundation.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_local_notifications/flutter_local_notifications.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++import 'alarm_service.dart';
++
++/// What is currently stopping alarms from reaching this phone.
++class AlarmReadiness {
++  final bool notificationsOn;
++  final bool alarmChannelOn;
++  final bool batteryUnrestricted;
++  final String manufacturer;
++
++  const AlarmReadiness({
++    required this.notificationsOn,
++    required this.alarmChannelOn,
++    required this.batteryUnrestricted,
++    required this.manufacturer,
++  });
++
++  bool get allGood => notificationsOn && alarmChannelOn && batteryUnrestricted;
++
++  /// Brands whose own battery manager stops apps the OS would otherwise allow.
++  bool get needsAutostartStep => const [
++        'xiaomi', 'redmi', 'poco', 'oppo', 'realme', 'oneplus',
++        'vivo', 'iqoo', 'huawei', 'honor', 'samsung',
++      ].contains(manufacturer);
++}
++
++/// Checks and fixes the phone settings that decide whether a push can reach a
++/// closed app. See BatterySetupScreen for the UI.
++class BatteryService {
++  BatteryService._();
++  static final BatteryService instance = BatteryService._();
++
++  static const _channel = MethodChannel('in.evide.parent/battery');
++  static const _skipKey = 'battery_setup_skipped_at';
++
++  /// Only Android has these problems. iOS manages background delivery itself.
++  bool get supported => !kIsWeb && Platform.isAndroid;
++
++  Future<AlarmReadiness> check() async {
++    var notificationsOn = true;
++    var alarmChannelOn = true;
++    var battery = true;
++    var maker = '';
++
++    try {
++      final android = FlutterLocalNotificationsPlugin()
++          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
++      notificationsOn = await android?.areNotificationsEnabled() ?? true;
++
++      final channels = await android?.getNotificationChannels();
++      final alarm = channels?.where((c) => c.id == AlarmService.alarmChannelId);
++      if (alarm != null && alarm.isNotEmpty) {
++        // The parent can silence a channel from system settings.
++        alarmChannelOn = alarm.first.importance.value >= Importance.high.value;
++      }
++    } catch (e) {
++      debugPrint('[Battery] notification check failed: $e');
++    }
++
++    try {
++      battery = await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations') ?? true;
++      maker = await _channel.invokeMethod<String>('manufacturer') ?? '';
++    } catch (e) {
++      debugPrint('[Battery] battery check failed: $e');
++    }
++
++    return AlarmReadiness(
++      notificationsOn: notificationsOn,
++      alarmChannelOn: alarmChannelOn,
++      batteryUnrestricted: battery,
++      manufacturer: maker,
++    );
++  }
++
++  Future<void> openBatterySettings() async {
++    try {
++      await _channel.invokeMethod('openBatteryOptimizationSettings');
++    } catch (e) {
++      debugPrint('[Battery] open battery settings failed: $e');
++    }
++  }
++
++  Future<void> openAutostartSettings() async {
++    try {
++      await _channel.invokeMethod('openAutostartSettings');
++    } catch (e) {
++      debugPrint('[Battery] open autostart settings failed: $e');
++    }
++  }
++
++  Future<void> openAlarmChannelSettings() async {
++    try {
++      await _channel.invokeMethod('openAlarmChannelSettings');
++    } catch (e) {
++      debugPrint('[Battery] open channel settings failed: $e');
++    }
++  }
++
++  Future<void> openNotificationSettings() async {
++    // Asks for the runtime permission (Android 13+).
++    final android = FlutterLocalNotificationsPlugin()
++        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
++    await android?.requestNotificationsPermission();
++  }
++
++  /// Whether to put the setup screen in front of the parent. Shown whenever
++  /// something is wrong, but not more than once every 3 days if they skip it.
++  Future<bool> shouldPrompt() async {
++    if (!supported) return false;
++    final r = await check();
++    if (r.allGood) return false;
++    final prefs = await SharedPreferences.getInstance();
++    final skippedAt = prefs.getInt(_skipKey);
++    if (skippedAt == null) return true;
++    final since = DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(skippedAt));
++    return since > const Duration(days: 3);
++  }
++
++  Future<void> markSkipped() async {
++    final prefs = await SharedPreferences.getInstance();
++    await prefs.setInt(_skipKey, DateTime.now().millisecondsSinceEpoch);
++  }
++}
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 0fa51eb..e215e96 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -16,6 +16,7 @@ dependencies:
+   firebase_messaging: ^15.1.3
+   flutter_local_notifications: ^17.2.3
+   audioplayers: ^6.1.0
++  shared_preferences: ^2.3.2
+   intl: ^0.19.0
+ 
+ dev_dependencies:
